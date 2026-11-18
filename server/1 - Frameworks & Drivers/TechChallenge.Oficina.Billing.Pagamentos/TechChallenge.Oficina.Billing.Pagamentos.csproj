@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\3 - Application Business Rules\TechChallenge.Oficina.Billing.UseCases\TechChallenge.Oficina.Billing.UseCases.csproj" />
+    <ProjectReference Include="..\..\4 - Enterprise Business Rules\TechChallenge.Oficina.Billing.Entities\TechChallenge.Oficina.Billing.Entities.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="mercadopago-sdk" Version="3.7.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.*" />
+  </ItemGroup>
+
+  <!-- O cliente do SDK do Mercado Pago e interno: os testes (e o proxy do Moq) precisam enxerga-lo -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="TechChallenge.Oficina.Billing.Pagamentos.Tests" />
+    <InternalsVisibleTo Include="DynamicProxyGenAssembly2" />
+  </ItemGroup>
+
+</Project>

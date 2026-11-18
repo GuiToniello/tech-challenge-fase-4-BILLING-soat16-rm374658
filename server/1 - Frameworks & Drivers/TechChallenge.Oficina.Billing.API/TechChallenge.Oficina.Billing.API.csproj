@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="AutoMapper" Version="16.1.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.4" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.4">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Serilog.AspNetCore" Version="10.0.0" />
+    <PackageReference Include="Serilog.Expressions" Version="5.0.0" />
+    <PackageReference Include="Swashbuckle.AspNetCore" Version="6.6.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\3 - Application Business Rules\TechChallenge.Oficina.Billing.UseCases\TechChallenge.Oficina.Billing.UseCases.csproj" />
+    <ProjectReference Include="..\TechChallenge.Oficina.Billing.DB\TechChallenge.Oficina.Billing.DB.csproj" />
+    <ProjectReference Include="..\TechChallenge.Oficina.Billing.Email\TechChallenge.Oficina.Billing.Email.csproj" />
+    <ProjectReference Include="..\TechChallenge.Oficina.Billing.Messaging\TechChallenge.Oficina.Billing.Messaging.csproj" />
+    <ProjectReference Include="..\TechChallenge.Oficina.Billing.Pagamentos\TechChallenge.Oficina.Billing.Pagamentos.csproj" />
+    <ProjectReference Include="..\..\2 - Interface Adapters\TechChallenge.Oficina.Billing.Controllers\TechChallenge.Oficina.Billing.Controllers.csproj" />
+    <ProjectReference Include="..\..\2 - Interface Adapters\TechChallenge.Oficina.Billing.Adapters\TechChallenge.Oficina.Billing.Adapters.csproj" />
+  </ItemGroup>
+
+</Project>

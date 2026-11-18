@@ -1,0 +1,1513 @@
+{
+  "info": {
+    "_postman_id": "5d8e2b47-9c1a-4f63-b2e8-7a40c9d1e356",
+    "name": "TechChallenge Oficina Billing API",
+    "description": "Colecao do Billing: orcamentos, pagamentos (Mercado Pago ou simulado) e a saga com o OS Service e a Management (SQS). Local: baseUrl http://localhost:7196, osBaseUrl http://localhost:7195 e managementBaseUrl http://localhost:7194. AWS: use o environment AWS (API Gateway, prefixos /billing, /os e /management).",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{auth_access_token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "item": [
+    {
+      "name": "00 - Setup",
+      "description": "Token (Auth0 e Lambda), cadastros base na Management e duas OS abertas no OS Service. A Management valida cada OS e envia o OrdemServicoValidada ao Billing pela fila SQS. Rodar antes das demais pastas.",
+      "item": [
+        {
+          "name": "Auth0 - Obter Token (ROPC)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "url": {
+              "raw": "https://{{auth0_domain}}/oauth/token",
+              "protocol": "https",
+              "host": [
+                "{{auth0_domain}}"
+              ],
+              "path": [
+                "oauth",
+                "token"
+              ]
+            },
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "grant_type",
+                  "value": "password",
+                  "type": "text"
+                },
+                {
+                  "key": "client_id",
+                  "value": "{{auth0_client_id}}",
+                  "type": "text"
+                },
+                {
+                  "key": "username",
+                  "value": "{{auth0_username}}",
+                  "type": "text"
+                },
+                {
+                  "key": "password",
+                  "value": "{{auth0_password}}",
+                  "type": "text"
+                },
+                {
+                  "key": "scope",
+                  "value": "openid profile email",
+                  "type": "text"
+                },
+                {
+                  "key": "audience",
+                  "value": "{{auth0_audience}}",
+                  "type": "text"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "  var tokenResponse = pm.response.json();",
+                  "  pm.test('Retorna access_token', function () {",
+                  "    pm.expect(tokenResponse).to.have.property('access_token');",
+                  "    pm.expect(tokenResponse.access_token).to.be.a('string').and.not.empty;",
+                  "  });",
+                  "  pm.collectionVariables.set('auth_access_token', tokenResponse.access_token);",
+                  "} else {",
+                  "  pm.collectionVariables.unset('auth_access_token');",
+                  "  console.log('Falha ao obter token Auth0. Status:', pm.response.code, 'Body:', pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Cadastrar Cliente do Token na Management (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Cliente cujo CPF vai na geracao do JWT pela Lambda. O cadastro aceita o token direto do Auth0 (sem cpf)",
+                  "function gerarCpfValido() {",
+                  "  const base = [];",
+                  "  for (let i = 0; i < 9; i++) base.push(Math.floor(Math.random() * 10));",
+                  "  let soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (10 - i);",
+                  "  let resto = soma % 11;",
+                  "  const d1 = resto < 2 ? 0 : 11 - resto;",
+                  "  soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (11 - i);",
+                  "  soma += d1 * 2;",
+                  "  resto = soma % 11;",
+                  "  const d2 = resto < 2 ? 0 : 11 - resto;",
+                  "  return [...base, d1, d2].join('');",
+                  "}",
+                  "pm.collectionVariables.set('token_cpf', gerarCpfValido());"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/clientes",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "clientes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nomeCompleto\": \"Cliente do Token Postman\",\n  \"identificacao\": \"{{token_cpf}}\",\n  \"email\": \"{{auth0_username}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Lambda - Gerar JWT com CPF (200)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sem API Gateway (execucao local) nao ha Lambda: a collection segue com o token direto do Auth0",
+                  "if (!pm.variables.get('tokenUrl')) {",
+                  "  console.log('tokenUrl vazio: geracao do JWT pela Lambda pulada.');",
+                  "  pm.execution.skipRequest();",
+                  "}"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) {",
+                  "  var token = pm.response.json().access_token;",
+                  "  pm.test('Retorna access_token', function () { pm.expect(token).to.be.a('string').and.not.empty; });",
+                  "  // JWT com a claim cpf: usado em todos os requests seguintes",
+                  "  pm.collectionVariables.set('auth_access_token', token);",
+                  "} else {",
+                  "  console.log('Falha ao gerar o JWT na Lambda. Status:', pm.response.code, 'Body:', pm.response.text());",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": "{{tokenUrl}}",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"email\": \"{{auth0_username}}\",\n  \"senha\": \"{{auth0_password}}\",\n  \"cpf\": \"{{token_cpf}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Health - Swagger JSON do Billing (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Content-Type json', function () {",
+                  "  pm.expect(pm.response.headers.get('Content-Type')).to.include('application/json');",
+                  "});",
+                  "pm.test('Documenta orcamentos e pagamentos', function () {",
+                  "  var caminhos = Object.keys(pm.response.json().paths);",
+                  "  pm.expect(caminhos).to.include('/api/orcamentos/{ordemServicoId}/aprovar');",
+                  "  pm.expect(caminhos).to.include('/api/pagamentos/notificacoes');",
+                  "});"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/swagger/v1/swagger.json",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "swagger",
+                "v1",
+                "swagger.json"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Cliente Base na Management (201)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "function gerarCpfValido() {",
+                  "  const base = [];",
+                  "  for (let i = 0; i < 9; i++) base.push(Math.floor(Math.random() * 10));",
+                  "  let soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (10 - i);",
+                  "  let resto = soma % 11;",
+                  "  const d1 = resto < 2 ? 0 : 11 - resto;",
+                  "  soma = 0;",
+                  "  for (let i = 0; i < 9; i++) soma += base[i] * (11 - i);",
+                  "  soma += d1 * 2;",
+                  "  resto = soma % 11;",
+                  "  const d2 = resto < 2 ? 0 : 11 - resto;",
+                  "  return [...base, d1, d2].join('');",
+                  "}",
+                  "function gerarPlacaMercosul() {",
+                  "  const letras = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';",
+                  "  const digitos = '0123456789';",
+                  "  return letras[Math.floor(Math.random() * 26)] + letras[Math.floor(Math.random() * 26)] + letras[Math.floor(Math.random() * 26)] +",
+                  "    digitos[Math.floor(Math.random() * 10)] + letras[Math.floor(Math.random() * 26)] +",
+                  "    digitos[Math.floor(Math.random() * 10)] + digitos[Math.floor(Math.random() * 10)];",
+                  "}",
+                  "function gerarDigitos(tamanho) {",
+                  "  let valor = '';",
+                  "  for (let i = 0; i < tamanho; i++) valor += Math.floor(Math.random() * 10);",
+                  "  return valor;",
+                  "}",
+                  "pm.collectionVariables.set('os_sufixo', Date.now().toString().slice(-6));",
+                  "pm.collectionVariables.set('cliente_identificacao', gerarCpfValido());",
+                  "pm.collectionVariables.set('veiculo_placa', gerarPlacaMercosul());",
+                  "pm.collectionVariables.set('veiculo_renavam', gerarDigitos(11));",
+                  "['cliente_id', 'veiculo_id', 'insumo_id', 'servico_id', 'os_id', 'os_recusa_id', 'pagamento_id', 'pagamento_status'].forEach(function (nome) { pm.collectionVariables.unset(nome); });"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('cliente_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/clientes",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "clientes"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nomeCompleto\": \"Cliente Billing {{os_sufixo}}\",\n  \"identificacao\": \"{{cliente_identificacao}}\",\n  \"email\": \"{{auth0_username}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Veiculo Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('veiculo_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/veiculos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "veiculos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"placa\": \"{{veiculo_placa}}\",\n  \"marca\": \"Toyota\",\n  \"modelo\": \"Corolla\",\n  \"ano\": 2023,\n  \"renavam\": \"{{veiculo_renavam}}\",\n  \"clienteId\": \"{{cliente_id}}\"\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Insumo Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('insumo_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/insumos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "insumos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Insumo Billing {{os_sufixo}}\",\n  \"fabricante\": \"Fabricante Billing\",\n  \"quantidadeDisponivel\": 50,\n  \"valorUnitario\": 44.9\n}"
+            }
+          }
+        },
+        {
+          "name": "Cadastrar Servico Base na Management (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('servico_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{managementBaseUrl}}/api/servicos",
+              "host": [
+                "{{managementBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "servicos"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"nome\": \"Servico Billing {{os_sufixo}}\",\n  \"descricao\": \"Servico base dos testes do Billing\",\n  \"itensServico\": [\n    {\n      \"insumoId\": \"{{insumo_id}}\",\n      \"quantidade\": 1\n    }\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Abrir OS no OS Service (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('os_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{osBaseUrl}}/api/ordens-servico",
+              "host": [
+                "{{osBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ordens-servico"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clienteId\": \"{{cliente_id}}\",\n  \"veiculoId\": \"{{veiculo_id}}\",\n  \"servicoIds\": [\n    \"{{servico_id}}\"\n  ]\n}"
+            }
+          }
+        },
+        {
+          "name": "Abrir OS para Recusa no OS Service (201)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 201', function () { pm.response.to.have.status(201); });",
+                  "pm.collectionVariables.set('os_recusa_id', pm.response.json().id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{osBaseUrl}}/api/ordens-servico",
+              "host": [
+                "{{osBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ordens-servico"
+              ]
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clienteId\": \"{{cliente_id}}\",\n  \"veiculoId\": \"{{veiculo_id}}\",\n  \"servicoIds\": [\n    \"{{servico_id}}\"\n  ]\n}"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Orcamentos",
+      "description": "Ciclo do orcamento: gerar (snapshot da OS validada pela Management), enviar por email, aprovar (cria a cobranca com link de pagamento) e recusar, alem dos erros 400 e 404.",
+      "item": [
+        {
+          "name": "01 - Gerar Orcamento (200)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O Billing precisa ter recebido o OrdemServicoValidada da Management",
+                  "// A saga e assincrona (filas SQS): espera os outros servicos consumirem os eventos antes da proxima requisicao",
+                  "const espera = Number(pm.variables.get('tempo_espera_ms') || 3000);",
+                  "setTimeout(function () {}, espera);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var orcamento = pm.response.json();",
+                  "pm.test('Status gerado (1)', function () { pm.expect(orcamento.status).to.eql(1); });",
+                  "pm.test('Valor total calculado', function () { pm.expect(orcamento.valorTotal).to.be.a('number').and.above(0); });",
+                  "pm.test('Servicos do snapshot', function () { pm.expect(orcamento.servicos).to.be.an('array').and.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/gerar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "gerar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "02 - Obter Orcamento (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Orcamento da OS', function () { pm.expect(pm.response.json().ordemServicoId).to.eql(pm.collectionVariables.get('os_id')); });",
+                  "pm.test('Descricao do status', function () { pm.expect(pm.response.json().statusDescricao).to.eql('Gerado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03 - Gerar Novamente (200, regerado)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Continua gerado (1)', function () { pm.expect(pm.response.json().status).to.eql(1); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/gerar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "gerar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "04 - Enviar Orcamento por Email (204, ou 400 sem Resend)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Sem ResendSettings:ApiKey o envio responde 400 (servico de email nao configurado)",
+                  "pm.test('Status 204 ou 400', function () { pm.expect(pm.response.code).to.be.oneOf([204, 400]); });",
+                  "if (pm.response.code === 400) {",
+                  "  pm.test('Mensagem de email nao configurado', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('email'); });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/enviar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "enviar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "05 - Aprovar Orcamento (200, link de pagamento)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var aprovacao = pm.response.json();",
+                  "pm.test('Orcamento aguardando pagamento (2)', function () { pm.expect(aprovacao.orcamento.status).to.eql(2); });",
+                  "pm.test('Cobranca pendente (1)', function () { pm.expect(aprovacao.pagamento.status).to.eql(1); });",
+                  "pm.test('Link de pagamento', function () { pm.expect(aprovacao.pagamento.linkPagamento).to.match(/^https:\\/\\//); });",
+                  "pm.test('Provedor informado', function () { pm.expect(['MercadoPago', 'Simulado']).to.include(aprovacao.pagamento.provedor); });",
+                  "pm.collectionVariables.set('pagamento_id', aprovacao.pagamento.id);"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/aprovar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "aprovar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "06 - Aprovar Novamente (200, mesma cobranca)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Devolve a cobranca pendente', function () { pm.expect(pm.response.json().pagamento.id).to.eql(pm.collectionVariables.get('pagamento_id')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/aprovar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "aprovar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07 - Gerar apos Aprovacao (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensagem menciona \"gerado novamente\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('gerado novamente'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}/gerar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}",
+                "gerar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "08 - Gerar Orcamento para Recusa (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_recusa_id}}/gerar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_recusa_id}}",
+                "gerar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "09 - Recusar Orcamento (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Status recusado (4)', function () { pm.expect(pm.response.json().status).to.eql(4); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_recusa_id}}/recusar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_recusa_id}}",
+                "recusar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "10 - Recusar Novamente (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensagem menciona \"pode ser recusado\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('pode ser recusado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_recusa_id}}/recusar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_recusa_id}}",
+                "recusar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "11 - Aprovar Orcamento Recusado (400)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 400', function () { pm.response.to.have.status(400); });",
+                  "pm.test('Mensagem menciona \"pode ser aprovado\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('pode ser aprovado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_recusa_id}}/aprovar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_recusa_id}}",
+                "aprovar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "12 - Obter Orcamento Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Mensagem menciona \"orcamento nao encontrado\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('orcamento nao encontrado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/00000000-0000-0000-0000-000000000000",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "00000000-0000-0000-0000-000000000000"
+              ]
+            }
+          }
+        },
+        {
+          "name": "13 - Gerar Orcamento de OS Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Mensagem menciona \"ordem de servico nao encontrada\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('ordem de servico nao encontrada'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/00000000-0000-0000-0000-000000000000/gerar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "00000000-0000-0000-0000-000000000000",
+                "gerar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "14 - Enviar Orcamento Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/00000000-0000-0000-0000-000000000000/enviar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "00000000-0000-0000-0000-000000000000",
+                "enviar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "15 - Aprovar Orcamento Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/00000000-0000-0000-0000-000000000000/aprovar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "00000000-0000-0000-0000-000000000000",
+                "aprovar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "16 - Recusar Orcamento Inexistente (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/00000000-0000-0000-0000-000000000000/recusar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "00000000-0000-0000-0000-000000000000",
+                "recusar"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Pagamentos",
+      "description": "Cobranca do orcamento aprovado: consulta, verificacao no provedor (Mercado Pago ou simulado, que aprova na hora) e o webhook de notificacoes, anonimo e sempre 200.",
+      "item": [
+        {
+          "name": "01 - Obter Pagamento da OS (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Cobranca criada na aprovacao', function () { pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('pagamento_id')); });",
+                  "pm.test('Link de pagamento', function () { pm.expect(pm.response.json().linkPagamento).to.be.a('string').and.not.empty; });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "02 - Verificar Pagamento (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var pagamento = pm.response.json();",
+                  "// Simulado: aprovado na verificacao. Mercado Pago: segue pendente ate o cliente pagar pelo link",
+                  "pm.test('Status pendente (1) ou aprovado (2)', function () { pm.expect([1, 2]).to.include(pagamento.status); });",
+                  "if (pagamento.provedor === 'Simulado') {",
+                  "  pm.test('Pagamento simulado aprovado (2)', function () { pm.expect(pagamento.status).to.eql(2); });",
+                  "}",
+                  "pm.collectionVariables.set('pagamento_status', String(pagamento.status));"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_id}}/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_id}}",
+                "verificar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "03 - Verificar Novamente (200, idempotente)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "pm.test('Mesmo pagamento', function () { pm.expect(pm.response.json().id).to.eql(pm.collectionVariables.get('pagamento_id')); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_id}}/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_id}}",
+                "verificar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "04 - Obter Orcamento apos Pagamento (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.collectionVariables.get('pagamento_status') === '2') {",
+                  "  pm.test('Orcamento aprovado (3) com o pagamento confirmado', function () { pm.expect(pm.response.json().status).to.eql(3); });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/orcamentos/{{os_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "orcamentos",
+                "{{os_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "05 - Acompanhamento da OS no OS Service (200)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// O OS Service recebe o PagamentoAprovado pela fila SQS",
+                  "// A saga e assincrona (filas SQS): espera os outros servicos consumirem os eventos antes da proxima requisicao",
+                  "const espera = Number(pm.variables.get('tempo_espera_ms') || 3000);",
+                  "setTimeout(function () {}, espera);"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "if (pm.collectionVariables.get('pagamento_status') === '2') {",
+                  "  pm.test('OS em execucao (4) apos o PagamentoAprovado', function () { pm.expect(pm.response.json().status).to.eql(4); });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{osBaseUrl}}/api/ordens-servico/{{os_id}}/acompanhamento",
+              "host": [
+                "{{osBaseUrl}}"
+              ],
+              "path": [
+                "api",
+                "ordens-servico",
+                "{{os_id}}",
+                "acompanhamento"
+              ]
+            }
+          }
+        },
+        {
+          "name": "06 - Obter Pagamento de OS sem Cobranca (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });",
+                  "pm.test('Mensagem menciona \"pagamento nao encontrado\"', function () { pm.expect((pm.response.json().message || '').toLowerCase()).to.include('pagamento nao encontrado'); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_recusa_id}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_recusa_id}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "07 - Verificar Pagamento de OS sem Cobranca (404)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 404', function () { pm.response.to.have.status(404); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_recusa_id}}/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_recusa_id}}",
+                "verificar"
+              ]
+            }
+          }
+        },
+        {
+          "name": "08 - Notificacao com Id Falso (200, sem token)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// Webhook do Mercado Pago: anonimo e sempre 200; o id e consultado no provedor e, desconhecido, e ignorado",
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/notificacoes?type=payment&data.id=123",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "notificacoes"
+              ],
+              "query": [
+                {
+                  "key": "type",
+                  "value": "payment"
+                },
+                {
+                  "key": "data.id",
+                  "value": "123"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            },
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"payment\",\n  \"data\": {\n    \"id\": \"123\"\n  }\n}"
+            }
+          }
+        },
+        {
+          "name": "09 - Notificacao de Outro Tipo (200, ignorada)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/notificacoes?topic=merchant_order&id=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "notificacoes"
+              ],
+              "query": [
+                {
+                  "key": "topic",
+                  "value": "merchant_order"
+                },
+                {
+                  "key": "id",
+                  "value": "1"
+                }
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        },
+        {
+          "name": "10 - Verificar sem Token (401)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 401', function () { pm.response.to.have.status(401); });"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_id}}/verificar",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_id}}",
+                "verificar"
+              ]
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:7196"
+    },
+    {
+      "key": "osBaseUrl",
+      "value": "http://localhost:7195"
+    },
+    {
+      "key": "managementBaseUrl",
+      "value": "http://localhost:7194"
+    },
+    {
+      "key": "tokenUrl",
+      "value": ""
+    },
+    {
+      "key": "tempo_espera_ms",
+      "value": "3000"
+    },
+    {
+      "key": "auth0_domain",
+      "value": "dev-mesy5gadx7cqn4i0.us.auth0.com"
+    },
+    {
+      "key": "auth0_client_id",
+      "value": "VJNHFAcEAUxr7D0PgmFA8paa01zSpj5C"
+    },
+    {
+      "key": "auth0_username",
+      "value": "guitoniello@gmail.com"
+    },
+    {
+      "key": "auth0_password",
+      "value": "P@ssw0rd"
+    },
+    {
+      "key": "auth0_audience",
+      "value": "http://localhost:7194"
+    },
+    {
+      "key": "auth_access_token",
+      "value": ""
+    },
+    {
+      "key": "token_cpf",
+      "value": ""
+    },
+    {
+      "key": "os_sufixo",
+      "value": ""
+    },
+    {
+      "key": "cliente_identificacao",
+      "value": ""
+    },
+    {
+      "key": "cliente_id",
+      "value": ""
+    },
+    {
+      "key": "veiculo_placa",
+      "value": ""
+    },
+    {
+      "key": "veiculo_renavam",
+      "value": ""
+    },
+    {
+      "key": "veiculo_id",
+      "value": ""
+    },
+    {
+      "key": "insumo_id",
+      "value": ""
+    },
+    {
+      "key": "servico_id",
+      "value": ""
+    },
+    {
+      "key": "os_id",
+      "value": ""
+    },
+    {
+      "key": "os_recusa_id",
+      "value": ""
+    },
+    {
+      "key": "pagamento_id",
+      "value": ""
+    },
+    {
+      "key": "pagamento_status",
+      "value": ""
+    }
+  ]
+}

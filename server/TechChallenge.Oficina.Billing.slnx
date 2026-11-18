@@ -1,0 +1,39 @@
+<Solution>
+  <Folder Name="/1 - Frameworks &amp; Drivers/">
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.API/TechChallenge.Oficina.Billing.API.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.DB/TechChallenge.Oficina.Billing.DB.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Email/TechChallenge.Oficina.Billing.Email.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Messaging/TechChallenge.Oficina.Billing.Messaging.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Pagamentos/TechChallenge.Oficina.Billing.Pagamentos.csproj" />
+  </Folder>
+  <Folder Name="/2 - Interface Adapters/">
+    <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Billing.Adapters/TechChallenge.Oficina.Billing.Adapters.csproj" />
+    <Project Path="2 - Interface Adapters/TechChallenge.Oficina.Billing.Controllers/TechChallenge.Oficina.Billing.Controllers.csproj" />
+  </Folder>
+  <Folder Name="/3 - Application Business Rules/">
+    <Project Path="3 - Application Business Rules/TechChallenge.Oficina.Billing.UseCases/TechChallenge.Oficina.Billing.UseCases.csproj" />
+  </Folder>
+  <Folder Name="/4 - Enterprise Business Rules/">
+    <Project Path="4 - Enterprise Business Rules/TechChallenge.Oficina.Billing.Entities/TechChallenge.Oficina.Billing.Entities.csproj" />
+  </Folder>
+  <Folder Name="/ADR/">
+    <File Path="../docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md" />
+    <File Path="../docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md" />
+  </Folder>
+  <Folder Name="/E2E/">
+    <File Path="../e2e/TechChallenge.Oficina.Billing.API.postman_collection.json" />
+    <File Path="../e2e/AWS.postman_environment.json" />
+  </Folder>
+  <Folder Name="/Tests/">
+    <Project Path="Tests/TechChallenge.Oficina.Billing.API.Tests/TechChallenge.Oficina.Billing.API.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.UseCases.Tests/TechChallenge.Oficina.Billing.UseCases.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Adapters.Tests/TechChallenge.Oficina.Billing.Adapters.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Controllers.Tests/TechChallenge.Oficina.Billing.Controllers.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Entities.Tests/TechChallenge.Oficina.Billing.Entities.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.DB.Tests/TechChallenge.Oficina.Billing.DB.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Email.Tests/TechChallenge.Oficina.Billing.Email.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Messaging.Tests/TechChallenge.Oficina.Billing.Messaging.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Pagamentos.Tests/TechChallenge.Oficina.Billing.Pagamentos.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.Integration.Tests/TechChallenge.Oficina.Billing.Integration.Tests.csproj" />
+  </Folder>
+</Solution>
