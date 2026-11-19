@@ -21,8 +21,8 @@ A rede, o EKS, o API Gateway (rota `/billing` e a rota pública do webhook do Me
 ```
 
 **Ordem com os outros repositórios:**
-- **Para subir:** Bootstrap do MANAGEMENT → Bootstrap deste repo e do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) (em qualquer ordem: um não depende do outro) → Deploy do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658).
-- **Para derrubar:** Destroy deste repo, do OS-SERVICE e do LAMBDA (em qualquer ordem) → Destroy do MANAGEMENT. O Destroy do MANAGEMENT (job `billing-check`) falha se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` ainda existirem.
+- **Para subir:** Bootstrap do MANAGEMENT → Bootstrap deste repo, a qualquer momento (ele não depende do [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658) nem do [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658), que sobem nesta ordem: OS-SERVICE → EXECUTION) → Deploy do [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658).
+- **Para derrubar:** Destroy deste repo, do OS-SERVICE, do EXECUTION e do LAMBDA (em qualquer ordem) → Destroy do MANAGEMENT. O Destroy do MANAGEMENT (job `billing-check`) falha se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` ainda existirem.
 
 ## 1. Workflows reutilizáveis
 

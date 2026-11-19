@@ -70,7 +70,7 @@ Os dois são anônimos. O `readinessProbe` fica em `/health`, para uma queda do 
 
 - **APM (R1 e R4):** latência p95 e 5xx por rota, por `service`, nos mesmos monitores da Management.
 - **Disponibilidade (R3):** `http.can_connect` do `billing-api` e o synthetic `GET /billing/health`, que entra no SLO de uptime.
-- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`, inclusive `mercadopago`) somam os eventos dos três serviços; o monitor de erros de integração também alerta para o Billing. Os eventos `os.orcamento_*`, `pagamento.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
+- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`, inclusive `mercadopago`) somam os eventos dos quatro serviços; o monitor de erros de integração também alerta para o Billing. Os eventos `os.orcamento_*`, `pagamento.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
 - **Limitação:** os monitores e os widgets de Kubernetes (CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis) filtram só o namespace `oficina` (`kube_namespace:oficina`). Os pods deste serviço ficam de fora deles.
 
 ## 6. Consultas úteis
@@ -89,7 +89,7 @@ No Log Explorer do Datadog:
 | Eventos publicados (um por fila) | `@evento:evento.publicado service:billing-api` |
 | Eventos ignorados | `@evento:evento.ignorado service:billing-api` |
 | Pagamento aprovado sem evento publicado | `service:billing-api "PagamentoAprovado nao publicado"` |
-| Histórico de uma OS nos três serviços | `@OrdemServicoId:<guid>` |
+| Histórico de uma OS nos quatro serviços | `@OrdemServicoId:<guid>` |
 
 Localmente, filtre o stdout do serviço `billing-api` do `docker-compose.yml`:
 

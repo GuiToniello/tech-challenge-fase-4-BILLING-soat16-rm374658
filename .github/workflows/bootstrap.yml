@@ -2,7 +2,8 @@ name: Bootstrap
 # Sobe o Billing, na ordem: testes → RDS (DB/infra) → imagem no ECR → manifests.
 # Requer o Bootstrap do repo MANAGEMENT antes: ele cria a VPC, o EKS, o API Gateway (rota /billing e a rota
 # pública do webhook do Mercado Pago), as filas SQS e a chave de acesso do Billing no SSM, que este repo só usa.
-# Ordem entre os repos: MANAGEMENT → este e OS-SERVICE (em qualquer ordem, um não depende do outro) → LAMBDA.
+# Ordem entre os repos: MANAGEMENT → este, a qualquer momento (não depende do OS-SERVICE nem do EXECUTION, que sobem
+# nesta ordem: OS-SERVICE → EXECUTION) → LAMBDA.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
 
 on:

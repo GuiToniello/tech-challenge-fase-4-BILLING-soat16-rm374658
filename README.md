@@ -6,10 +6,11 @@ Microsserviço de orçamento e pagamentos do software de gestão de uma oficina 
 
 Tech Challenge da Fase 4 do curso SOAT16 da FIAP. Na fase 4, o orçamento saiu do serviço Management e, junto com o pagamento pelo Mercado Pago, virou este microsserviço, com banco, namespace no Kubernetes e pipelines próprios ([ADR-021](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) e [ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)).
 
-O sistema tem quatro repositórios:
+O sistema tem cinco repositórios:
 - **BILLING** (este): orçamento (gerar, consultar, enviar por e-mail, aprovar e recusar), pagamentos pelo Mercado Pago e, por evento, a liberação da OS para execução depois do pagamento.
 - [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658): ciclo de vida da OS (abertura, atualização, status, histórico, acompanhamento e indicadores).
 - [MANAGEMENT](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658): cadastros (clientes, veículos, serviços e insumos), estoque, validação da OS e e-mail de mudança de status. Também cria a rede, o cluster EKS, o API Gateway, o Datadog e as filas SQS que este repositório usa.
+- [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658): Execução e Produção, com banco próprio: a fila de produção da oficina, o diagnóstico e a execução da OS. Não troca eventos com este serviço: o Billing não publica na fila dele, e ele só publica para o OS Service.
 - [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658): autenticação (Lambda authorizer e `POST /auth/token`).
 
 Os serviços se comunicam só por eventos no Amazon SQS ([ADR-020](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro. Além do SQS, este serviço só chama serviços externos: o Mercado Pago (pagamentos) e o Resend (e-mail).
@@ -96,6 +97,7 @@ O evento consumido entra pelo [EventosController](./server/2%20-%20Interface%20A
 | Cobrança no Mercado Pago (Checkout Pro), verificação do pagamento e webhook | Validação da OS e débito de estoque depois do pagamento (Management) |
 | Snapshot da OS: dados validados pela Management e status vindo do OS Service | Ciclo de vida, status, histórico e indicadores da OS (OS Service) |
 | Registro das cobranças, mantido mesmo se a OS for excluída | E-mail de mudança de status (Management) |
+| | Fila de produção, diagnóstico e execução da OS (Execução e Produção) |
 
 O Billing não guarda cadastros. Os serviços da OS, com nome e valor, o e-mail do cliente e a informação de estoque chegam prontos no evento `OrdemServicoValidada`, calculados pela Management.
 
@@ -133,7 +135,7 @@ Envelope JSON (camelCase): `{"id","tipo","versao":1,"ocorridoEm","origem","dados
 | `PagamentoAprovado` | Publicado (→ OS Service e Management) | Pagamento confirmado, uma única vez | `ordemServicoId`, `pagamentoId`, `valor` → OS `EmExecucao` (4), e a Management debita o estoque (uma vez por OS) |
 
 - **Fila consumida:** `techchallenge-oficina-billing.fifo`. **Filas de publicação:** `techchallenge-oficina-os-service.fifo` e `techchallenge-oficina-management.fifo` (lista `SqsSettings:FilasPublicacao`).
-- ***Fan-out* no publicador:** o mesmo envelope (com o mesmo `id`) vai para as duas filas, com um log `evento.publicado` por fila. Quem não usa o evento o ignora: a Management, por exemplo, ignora `OrcamentoGerado`.
+- ***Fan-out* no publicador:** o mesmo envelope (com o mesmo `id`) vai para as duas filas, com um log `evento.publicado` por fila. Quem não usa o evento o ignora: a Management, por exemplo, ignora `OrcamentoGerado`. Pela regra da ADR-020 (cada serviço publica nas filas de quem consome algum evento dele), o Billing não publica na fila do Execução e Produção, que não usa nenhum evento daqui.
 - **Publicar depois de gravar:** se a publicação falhar numa fila, sai `integracao.falha` (com a `Fila`) e a requisição responde 500. A alteração já gravada continua, e as filas anteriores já receberam o evento.
 - **Consumo idempotente:** status repetido, OS desconhecida e tipos que este serviço não trata (como `OrdemServicoAberta` e `OrdemServicoAtualizada`, que também chegam aqui) são ignorados, e a mensagem é apagada. Dados inválidos lançam exceção: a mensagem volta depois do *visibility timeout* e, no 5º recebimento, vai para a DLQ. O lote é processado em sequência e para na primeira falha, para um evento da mesma OS não passar na frente.
 - `OrcamentoAprovado` não existe mais: aprovar o orçamento só leva a OS para execução depois do pagamento ([ADR-021](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)).
@@ -175,12 +177,13 @@ sequenceDiagram
 ```
 
 - Setas tracejadas são eventos no SQS. Cada mudança de status no OS Service também publica `OrdemServicoStatusAlterado`, que atualiza o status no snapshot do Billing (fora do diagrama).
+- **Diagnóstico e execução (fora do diagrama):** antes do orçamento, o diagnóstico pode começar no Execução e Produção (`DiagnosticoIniciado` → OS `EmDiagnostico`); depois do pagamento, a OS entra na fila de produção dele, que finaliza a execução (`ExecucaoFinalizada` → OS `Finalizada`). Esses eventos vão só para o OS Service; o Billing só vê o status novo, pelo `OrdemServicoStatusAlterado`.
 - **Recusa:** `POST /api/orcamentos/{id}/recusar` → `OrcamentoRecusado` → OS `Finalizada` (5).
 - **Compensação:** se algum cadastro não existir, a Management publica `OrdemServicoRejeitada`: o OS Service cancela a OS (`Cancelada`, 8), e o Billing apaga a referência.
 
 ### 2.5 Autenticação
 
-Igual à Management e ao OS Service: os endpoints exigem um JWT do Auth0 (`Authorization: Bearer <token>`), exceto `/health`, `/health/ready` e o webhook `POST /api/pagamentos/notificacoes`. O webhook é anônimo porque o Mercado Pago não envia o JWT; a situação do pagamento é sempre consultada no próprio Mercado Pago ([ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)). O `AuthSettings` do `appsettings.json` usa o mesmo `Authority` e o mesmo `Audience` das outras APIs, então o mesmo token vale para as três. Na AWS, o Lambda authorizer do API Gateway exige também a claim `cpf` nas rotas `/billing/...` ([RFC-003](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658/blob/main/docs/rfc/RFC-003-Estrategia-de-Autenticacao.md)); a rota do webhook é pública no gateway.
+Igual à Management e ao OS Service: os endpoints exigem um JWT do Auth0 (`Authorization: Bearer <token>`), exceto `/health`, `/health/ready` e o webhook `POST /api/pagamentos/notificacoes`. O webhook é anônimo porque o Mercado Pago não envia o JWT; a situação do pagamento é sempre consultada no próprio Mercado Pago ([ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)). O `AuthSettings` do `appsettings.json` usa o mesmo `Authority` e o mesmo `Audience` das outras APIs, então o mesmo token vale para as quatro. Na AWS, o Lambda authorizer do API Gateway exige também a claim `cpf` nas rotas `/billing/...` ([RFC-003](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658/blob/main/docs/rfc/RFC-003-Estrategia-de-Autenticacao.md)); a rota do webhook é pública no gateway.
 
 ## 3. Pagamentos com o Mercado Pago
 
@@ -218,7 +221,7 @@ Detalhes oficiais: [documentação do Checkout Pro](https://www.mercadopago.com.
 - Para rodar sem container: .NET SDK 10.x e um PostgreSQL.
 - Para containers: Docker ou Podman. O `docker-compose.yml` já traz o Postgres, o ElasticMQ e a API.
 
-Portas usadas, diferentes das da Management (7194) e do OS Service (7195), para os três serviços rodarem juntos:
+Portas usadas, diferentes das da Management (7194), do OS Service (7195) e do Execução e Produção (7197), para os quatro serviços rodarem juntos:
 
 | Serviço | Porta no host |
 |---|---|
@@ -230,7 +233,7 @@ Para mudar as portas ou ligar o Mercado Pago e o Resend, crie o `.env` a partir 
 
 ### 4.2 Containers
 
-Na raiz do repositório, rode `docker compose up -d --build` (ou `podman compose up -d --build`). Sobem o `postgres`, o `elasticmq` (com as seis filas FIFO do `elasticmq.conf`: as três da saga e as DLQs) e o `billing-api`. O Swagger fica em `http://localhost:7196/index.html`.
+Na raiz do repositório, rode `docker compose up -d --build` (ou `podman compose up -d --build`). Sobem o `postgres`, o `elasticmq` (com as seis filas FIFO do `elasticmq.conf`: as três que o Billing usa, a dele e as do OS Service e da Management, e as DLQs) e o `billing-api`. O Swagger fica em `http://localhost:7196/index.html`.
 
 Sem `MERCADOPAGO_ACCESS_TOKEN`, o pagamento roda no modo simulado (seção 3.1). Sem `RESEND_API_KEY`, o envio do orçamento por e-mail responde 400.
 
@@ -243,18 +246,19 @@ A API sobe em `http://localhost:7196` (perfil `http` do `launchSettings.json`, a
 
 ### 4.4 Saga local com a Management e o OS Service
 
-Sozinho, este serviço não conhece nenhuma OS: o snapshot vem do `OrdemServicoValidada` da Management, e o status, do OS Service. Para ver a saga funcionando, os três serviços precisam usar o mesmo ElasticMQ, o da Management (container `oficina-elasticmq`):
+Sozinho, este serviço não conhece nenhuma OS: o snapshot vem do `OrdemServicoValidada` da Management, e o status, do OS Service. Para ver a saga funcionando, a Management, o OS Service e o Billing precisam usar o mesmo ElasticMQ, o da Management (container `oficina-elasticmq`), que tem as filas de todos os serviços:
 
 1. No repositório [MANAGEMENT](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658): `podman compose up -d` (ou `docker compose up -d`).
-2. No repositório [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658): `SQS_SERVICE_URL=http://oficina-elasticmq:9324 podman compose up -d` e `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-os-service-api`.
+2. No repositório [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658): `SQS_SERVICE_URL=http://oficina-elasticmq:9324 podman compose up -d --build` e `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-os-service-api`.
 3. Neste repositório, suba o compose apontando o SQS para o ElasticMQ da Management:
    - bash: `SQS_SERVICE_URL=http://oficina-elasticmq:9324 podman compose up -d --build`
    - PowerShell: `$env:SQS_SERVICE_URL="http://oficina-elasticmq:9324"; podman compose up -d --build`
 4. Ligue o container do Billing à rede do compose da Management, para ele achar o ElasticMQ pelo nome do container:
    - `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-billing-api` (no Docker, `docker network connect ...` com os mesmos argumentos).
    - O nome da rede vem do nome da pasta do repositório MANAGEMENT (o nome do projeto do compose, em minúsculas) mais `_default`. Se a pasta tiver outro nome, confira com `podman network ls`.
+5. Só para a saga completa (pasta **Saga** da collection do OS-SERVICE), suba também o [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) do mesmo jeito: `SQS_SERVICE_URL=http://oficina-elasticmq:9324 podman compose up -d --build` e `podman network connect tech-challenge-fase-4-management-soat16-rm374658_default oficina-execution-api`. A collection deste repositório não precisa dele.
 
-A Management fica em `http://localhost:7194`, o OS Service em `http://localhost:7195` e o Billing em `http://localhost:7196`. Para testar, use a collection deste repositório (seção 8) ou a pasta **Saga** da collection do OS-SERVICE. O ElasticMQ deste repositório continua de pé, mas sem uso.
+A Management fica em `http://localhost:7194`, o OS Service em `http://localhost:7195`, o Billing em `http://localhost:7196` e o Execução e Produção em `http://localhost:7197`. Para testar, use a collection deste repositório (seção 8) ou a pasta **Saga** da collection do OS-SERVICE. O ElasticMQ deste repositório continua de pé, mas sem uso.
 
 ### 4.5 Testes
 
@@ -293,7 +297,7 @@ Este repositório cria só o banco e os manifests do Billing. O resto vem do MAN
 |---|---|---|
 | Aplicação | [server/](./server/) | Código .NET, testes e imagem Docker, publicada no ECR `techchallenge-oficina-billing` |
 | Banco | [DB/infra/](./DB/infra/) | RDS PostgreSQL `techchallenge-oficina-billing-postgres`: banco `oficina_billing`, usuário `sa`, porta `5432`, `db.t3.micro` com 20 GiB `gp3` criptografado, single-AZ, sem backup e sem proteção contra exclusão (ambiente descartável). Subnet group `techchallenge-oficina-billing-rds-subnets` e SG `techchallenge-oficina-billing-rds-sg`, com entrada na `5432` só a partir do SG dos nodes do EKS. As tabelas (`ordens_servico_referencias`, `orcamentos`, `pagamentos` e as de serviços) são criadas pelas migrations da API, no startup |
-| Manifests | [kubernetes/k8s/](./kubernetes/k8s/) | Namespace `billing`; ConfigMap `billing-api-config` (ambiente, nível de log, filas SQS e `AWS_REGION`); Secret `billing-api-secrets` (connection string, chave do SQS, token e URL de notificação do Mercado Pago e chave do Resend, gerado pelo pipeline); Deployment `billing-api` (1 réplica inicial, 100m/128Mi de requests, 500m/512Mi de limits, probes em `/health` e labels do Datadog); Service `NodePort` 30082; HPA de 1 a 3 pods (CPU 30% e memória 150%) |
+| Manifests | [kubernetes/k8s/](./kubernetes/k8s/) | Namespace `billing`; ConfigMap `billing-api-config` (ambiente, nível de log, filas SQS e `AWS_REGION`); Secret `billing-api-secrets` (connection string, chave do SQS, token e URL de notificação do Mercado Pago e chave do Resend, gerado pelo pipeline); Deployment `billing-api` (1 réplica inicial, 100m/128Mi de requests, 500m/512Mi de limits, probes em `/health` e labels do Datadog); Service `NodePort` 30082; HPA de 1 a 2 pods (CPU 30% e memória 150%) |
 
 O `DB/infra` encontra a rede do MANAGEMENT pelo cluster EKS e por nome, sem ler o state dele: a VPC vem do cluster, as subnets privadas pela tag `Name = techchallenge-oficina-private-*`, e o SG dos nodes pelo nome.
 
@@ -354,8 +358,8 @@ O CI/CD usa GitHub Actions, no mesmo padrão do MANAGEMENT e do OS-SERVICE. Os d
 - **K8s Apply** (manual): reaplica os manifests e reinicia a API. Use depois de trocar `MERCADOPAGO_ACCESS_TOKEN` ou `RESEND_API_KEY`, depois que o MANAGEMENT recriar as chaves do SQS ou o API Gateway (a URL de notificação muda), ou ao ligar e desligar o Datadog.
 
 **Ordem entre os repositórios:**
-- **Para subir:** Bootstrap do MANAGEMENT → Bootstrap do OS-SERVICE e deste repositório (em qualquer ordem) → Deploy do LAMBDA.
-- **Para derrubar:** Destroy do LAMBDA, do OS-SERVICE e deste repositório (em qualquer ordem) → Destroy do MANAGEMENT.
+- **Para subir:** Bootstrap do MANAGEMENT → Bootstrap deste repositório, a qualquer momento (ele não depende do OS-SERVICE nem do EXECUTION, que sobem nesta ordem: OS-SERVICE → EXECUTION) → Deploy do LAMBDA.
+- **Para derrubar:** Destroy do LAMBDA, do OS-SERVICE, do EXECUTION e deste repositório (em qualquer ordem) → Destroy do MANAGEMENT.
 
 ### 7.1 Configuração no GitHub e na AWS
 
@@ -376,21 +380,21 @@ Use a collection `e2e/TechChallenge.Oficina.Billing.API.postman_collection.json`
 - **Orcamentos:** gerar, consultar, gerar de novo, enviar por e-mail (204, ou 400 sem o Resend), aprovar (com o link de pagamento), aprovar de novo (mesma cobrança), recusar a segunda OS e os casos de erro (400 e 404).
 - **Pagamentos:** consultar a cobrança, verificar (aprovada no modo simulado), verificar de novo, conferir o orçamento `Aprovado` e a OS `EmExecucao` no OS Service, os 404 de OS sem cobrança, o webhook sem token (200, inclusive com id falso) e a verificação sem token (401).
 
-Os passos com espera aguardam o consumo dos eventos pelas outras APIs (`tempo_espera_ms`, padrão de 3000 ms). A saga completa, até a entrega da OS, está na pasta **Saga** da [collection do OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/e2e/TechChallenge.Oficina.OsService.API.postman_collection.json).
+Os passos com espera aguardam o consumo dos eventos pelas outras APIs (`tempo_espera_ms`, padrão de 3000 ms). A saga completa, até a entrega da OS (com o diagnóstico e a execução no Execução e Produção), está na pasta **Saga** da [collection do OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/e2e/TechChallenge.Oficina.OsService.API.postman_collection.json).
 
-Localmente, a collection usa `baseUrl` = `http://localhost:7196`, `osBaseUrl` = `http://localhost:7195` e `managementBaseUrl` = `http://localhost:7194`, com `tokenUrl` vazio (o JWT com `cpf` não é gerado, e vale o token direto do Auth0). As três APIs precisam estar no ar, com o mesmo ElasticMQ (seção 4.4).
+Localmente, a collection usa `baseUrl` = `http://localhost:7196`, `osBaseUrl` = `http://localhost:7195` e `managementBaseUrl` = `http://localhost:7194`, com `tokenUrl` vazio (o JWT com `cpf` não é gerado, e vale o token direto do Auth0). As três APIs (Management, OS Service e Billing) precisam estar no ar, com o mesmo ElasticMQ (seção 4.4).
 
 Na AWS, importe também o `e2e/AWS.postman_environment.json` e preencha só o `gatewayUrl` (a URL do API Gateway, output `api_gateway_endpoint` do MANAGEMENT). O environment monta `baseUrl` = `{{gatewayUrl}}/billing`, `osBaseUrl` = `{{gatewayUrl}}/os`, `managementBaseUrl` = `{{gatewayUrl}}/management` e `tokenUrl` = `{{gatewayUrl}}/auth/token`.
 
 ## 9. Decisões de arquitetura (ADRs e RFCs)
 
-As ADRs e RFCs são numeradas em sequência única entre os quatro repositórios. Este repositório guarda:
+As ADRs e RFCs são numeradas em sequência única entre os cinco repositórios. Este repositório guarda:
 - [ADR-021: Billing Service, Orçamento e Pagamentos com Banco Próprio](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)
 - [ADR-022: Pagamentos com Mercado Pago](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)
 
-As demais ficam no MANAGEMENT (índice em [docs/adr/INDICE.md](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/INDICE.md)), no OS-SERVICE e no LAMBDA, e valem também para este serviço:
+As demais ficam no MANAGEMENT (índice em [docs/adr/INDICE.md](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/INDICE.md)), no OS-SERVICE, no EXECUTION e no LAMBDA, e valem também para este serviço:
 
 - Código: [ADR-001 Clean Architecture](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-001-Clean-Architecture.md), [ADR-002 DDD e entidades ricas](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-002-DDD-e-Entidades-Ricas.md), [ADR-004 Gateways](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-004-Gateways-e-Persistencia.md), [ADR-005 Commands/Queries/ViewModels](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-005-Separacao-Commands-Queries-ViewModels.md), [ADR-006 AutoMapper](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-006-AutoMapper-nos-UseCases.md), [ADR-007 EF Core com PostgreSQL](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-007-EFCore-com-PostgreSQL.md), [ADR-008 Swagger](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-008-Swagger-para-API.md), [ADR-009 Migrações no startup](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-009-Migracoes-Automaticas-no-Startup.md) e [ADR-013 Erros em duas camadas](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-013-Estrategia-de-Tratamento-de-Erros-em-Duas-Camadas.md).
 - Negócio: [ADR-011 E-mail](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-011-Envio-de-Email-de-Orcamento.md) (o padrão de porta e adapter usado aqui no e-mail e no pagamento) e [ADR-012 Estoque](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-012-Controle-de-Estoque-de-Insumos.md).
-- Plataforma e serviços: [ADR-014 Observabilidade com Datadog](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-014-Observabilidade-com-Datadog.md), [ADR-015 Comunicação síncrona via API Gateway](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-015-Comunicacao-Sincrona-via-API-Gateway.md), [ADR-016 HPA](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-016-Escalabilidade-com-HPA.md), [ADR-017 PostgreSQL no RDS](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md), [ADR-019 OS Service](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) (repo OS-SERVICE) e [ADR-020 Eventos com SQS e saga coreografada](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
+- Plataforma e serviços: [ADR-014 Observabilidade com Datadog](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-014-Observabilidade-com-Datadog.md), [ADR-015 Comunicação síncrona via API Gateway](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-015-Comunicacao-Sincrona-via-API-Gateway.md), [ADR-016 HPA](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-016-Escalabilidade-com-HPA.md), [ADR-017 PostgreSQL no RDS](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-017-PostgreSQL-no-Amazon-RDS-e-Modelo-de-Dados.md), [ADR-019 OS Service](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/docs/adr/ADR-019-OS-Service-Microsservico-com-Banco-Proprio.md) (repo OS-SERVICE), [ADR-023 Execução e Produção](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658/blob/main/docs/adr/ADR-023-Execucao-e-Producao-Fila-de-Execucao-e-Status-por-Eventos.md) (repo EXECUTION) e [ADR-020 Eventos com SQS e saga coreografada](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md).
 - RFCs: [RFC-001 Escolha da nuvem](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/rfc/RFC-001-Escolha-da-Nuvem.md), [RFC-002 Escolha do banco de dados](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/rfc/RFC-002-Escolha-do-Banco-de-Dados.md), [RFC-003 Estratégia de autenticação](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658/blob/main/docs/rfc/RFC-003-Estrategia-de-Autenticacao.md) (repo LAMBDA) e [RFC-004 Comunicação entre microsserviços](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/rfc/RFC-004-Comunicacao-entre-Microsservicos.md).

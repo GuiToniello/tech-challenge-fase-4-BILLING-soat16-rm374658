@@ -5,7 +5,7 @@
 **Resumo**:
 O Billing ([ADR-021](ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)) cobra o orçamento aprovado pelo **Checkout Pro do Mercado Pago**: cria uma preferência com o valor do orçamento e devolve o link de pagamento. A situação do pagamento é sempre consultada no próprio Mercado Pago, pela rota de verificação ou pelo webhook, e o `PagamentoAprovado` é publicado uma única vez. Sem access token, um gateway simulado aprova o pagamento, para a saga rodar sem conta no Mercado Pago.
 
-> As ADRs e RFCs são numeradas em sequência única entre os repositórios [MANAGEMENT](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658), [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), BILLING (este) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658).
+> As ADRs e RFCs são numeradas em sequência única entre os repositórios [MANAGEMENT](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658), [OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658), BILLING (este), [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658) e [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658).
 
 **Contexto**:
 - Aprovar o orçamento passou a exigir o pagamento antes da execução (ADR-021).
