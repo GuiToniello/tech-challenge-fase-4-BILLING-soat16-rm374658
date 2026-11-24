@@ -1,3 +1,4 @@
+using Amazon;
 using Amazon.DynamoDBv2;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -55,10 +56,22 @@ public sealed class ExtensionsTests
     [Fact]
     public void AddInfraNoSql_DeveUsarEndpointPadraoDaAws_QuandoServiceUrlVazio()
     {
-        // Na AWS: sem ServiceURL, o endpoint sai da regiao do ambiente (AWS_REGION)
-        using var provider = CriarProvider(new DynamoDbSettings { TabelaHistoricoPagamentos = Tabela });
+        // Na AWS: sem ServiceURL, o endpoint sai da regiao do ambiente (AWS_REGION do pod). Sem regiao o SDK nem cria o cliente, entao o teste
+        // fixa a regiao no AWSConfigs (primeira fonte do SDK) para nao depender de AWS_REGION nem do perfil em ~/.aws, que o CI nao tem.
+        // Nenhuma requisicao e enviada: so o cliente e criado.
+        var regiaoAnterior = AWSConfigs.AWSRegion;
+        AWSConfigs.AWSRegion = "us-east-1";
 
-        Assert.Null(provider.GetRequiredService<IAmazonDynamoDB>().Config.ServiceURL);
+        try
+        {
+            using var provider = CriarProvider(new DynamoDbSettings { TabelaHistoricoPagamentos = Tabela });
+
+            Assert.Null(provider.GetRequiredService<IAmazonDynamoDB>().Config.ServiceURL);
+        }
+        finally
+        {
+            AWSConfigs.AWSRegion = regiaoAnterior;
+        }
     }
 
     [Theory]

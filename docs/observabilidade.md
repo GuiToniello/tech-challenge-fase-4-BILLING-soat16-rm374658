@@ -89,7 +89,7 @@ No Log Explorer do Datadog:
 | Uso do modo simulado | `@evento:pagamento.simulado` |
 | Falhas no Mercado Pago | `@Integracao:mercadopago` |
 | Falhas no histórico de pagamentos (DynamoDB) | `@Integracao:dynamodb service:billing-api` |
-| Linhas que faltam no histórico | `@Integracao:dynamodb @Operacao:registro_historico` |
+| Linhas que faltam no histórico | `@Integracao:dynamodb @Operacao:registro_historico service:billing-api` |
 | Eventos publicados (um por fila) | `@evento:evento.publicado service:billing-api` |
 | Eventos ignorados | `@evento:evento.ignorado service:billing-api` |
 | Pagamento aprovado sem evento publicado | `service:billing-api "PagamentoAprovado nao publicado"` |
