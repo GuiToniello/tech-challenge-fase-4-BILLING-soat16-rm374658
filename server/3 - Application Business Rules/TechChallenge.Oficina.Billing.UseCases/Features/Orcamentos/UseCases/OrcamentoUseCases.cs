@@ -166,6 +166,20 @@ public sealed class OrcamentoUseCases : IOrcamentoUseCases
             pagamento.OrdemServicoId,
             pagamento.Valor);
 
+        // Historico complementar (best-effort, nao lanca): so depois da gravacao, e sem o token da requisicao para nao perder o registro
+        await _facade.HistoricoPagamentoGateway.RegistrarAsync(
+            new EventoHistoricoPagamento(
+                pagamento.OrdemServicoId,
+                DateTime.UtcNow,
+                TiposHistoricoPagamento.CobrancaCriada,
+                OrigensHistoricoPagamento.Aprovacao,
+                pagamento.Id,
+                pagamento.Provedor.ToString(),
+                pagamento.Valor,
+                null,
+                pagamento.PreferenciaId),
+            CancellationToken.None);
+
         return CriarAprovacaoViewModel(orcamento, pagamento);
     }
 

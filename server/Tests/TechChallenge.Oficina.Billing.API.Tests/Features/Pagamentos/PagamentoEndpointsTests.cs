@@ -56,6 +56,22 @@ public sealed class PagamentoEndpointsTests
     }
 
     [Fact]
+    public async Task MapPagamentoEndpoints_GetHistorico_DeveRetornarOkComOsEventos()
+    {
+        var ordemServicoId = Guid.NewGuid();
+        IReadOnlyCollection<EventoHistoricoPagamentoViewModel> historico =
+        [
+            new EventoHistoricoPagamentoViewModel { OrdemServicoId = ordemServicoId, Tipo = "CobrancaCriada" },
+            new EventoHistoricoPagamentoViewModel { OrdemServicoId = ordemServicoId, Tipo = "PagamentoAprovado" }
+        ];
+        _pagamentoUseCasesMock.Setup(u => u.ListarHistoricoAsync(ordemServicoId, It.IsAny<CancellationToken>())).ReturnsAsync(historico);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(await CriarController().GetHistorico(ordemServicoId, CancellationToken.None));
+
+        Assert.Equal(["CobrancaCriada", "PagamentoAprovado"], ok.Value!.Select(evento => evento.Tipo));
+    }
+
+    [Fact]
     public async Task MapPagamentoEndpoints_Notificacao_DeveRetornarOkMesmoQuandoOProcessamentoFalha()
     {
         _pagamentoUseCasesMock

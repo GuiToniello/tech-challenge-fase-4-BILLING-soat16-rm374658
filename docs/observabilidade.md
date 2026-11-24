@@ -23,7 +23,8 @@ O catálogo fica em [OrdemServicoLogEventos.cs](../server/3%20-%20Application%20
 | `os.orcamento_gerado` (1004) | Information | `OrcamentoUseCases.GerarAsync`, depois de gravar e publicar `OrcamentoGerado` | `OrdemServicoId`, `ValorTotal` (número), `Regerado` (`true` quando o orçamento já existia) |
 | `os.orcamento_enviado` (1005) | Information | `OrcamentoUseCases.EnviarPorEmailAsync`, depois do envio pelo Resend | `OrdemServicoId`, `ValorTotal` (número) |
 | `os.falha` (2001) | Warning | `OrcamentosController` (gerar, enviar, aprovar e recusar) e `PagamentosController` (verificação e notificação), quando a ação é rejeitada por regra de negócio ou não encontra o recurso | `Etapa`, `OrdemServicoId` (na notificação, `PagamentoExternoId`), `TipoFalha`, `Motivo` |
-| `integracao.falha` (3001) | Error | `OrcamentoUseCases.EnviarPorEmailAsync` (Resend), `GatewayPagamentoMercadoPago` (Mercado Pago) e `EventosPublisher` (SQS, por fila): registram e relançam, e a rota responde 500 (a notificação continua 200). Na publicação, a alteração já gravada continua. `SqsConsumidorHostedService`, ao receber ou processar uma mensagem: ela volta para a fila. Ao obter a URL da fila de consumo, sai como `Warning`, com nova tentativa a cada 5 s | `Integracao`, `Operacao`, `error.*` e, conforme o caso, `OrdemServicoId`, `PagamentoExternoId`, `Tipo`, `EventoId`, `MensagemId` e `Fila` |
+| `integracao.falha` (3001) | Warning | `HistoricoPagamentoGateway.RegistrarAsync` (DynamoDB), ao gravar um item do histórico de pagamentos: registra e **não** relança. O pagamento já está gravado no PostgreSQL e o fluxo segue; só aquela linha falta no histórico ([ADR-024](./adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) | `Integracao` = `dynamodb`, `Operacao` = `registro_historico`, `Tipo` (tipo do evento do histórico, como `CobrancaCriada`), `OrdemServicoId`, `error.*` |
+| `integracao.falha` (3001) | Error | `OrcamentoUseCases.EnviarPorEmailAsync` (Resend), `GatewayPagamentoMercadoPago` (Mercado Pago), `EventosPublisher` (SQS, por fila) e `HistoricoPagamentoGateway.ListarAsync` (DynamoDB, consulta do histórico): registram e relançam, e a rota responde 500 (a notificação continua 200). Na publicação, a alteração já gravada continua. `SqsConsumidorHostedService`, ao receber ou processar uma mensagem: ela volta para a fila. Ao obter a URL da fila de consumo, sai como `Warning`, com nova tentativa a cada 5 s | `Integracao`, `Operacao`, `error.*` e, conforme o caso, `OrdemServicoId`, `PagamentoExternoId`, `Tipo`, `EventoId`, `MensagemId` e `Fila` |
 | `evento.publicado` (4001) | Information | `EventosPublisher`, depois de enviar o evento a cada fila: um log por fila (OS Service e Management) | `Tipo`, `EventoId`, `Fila`, `OrdemServicoId` |
 | `evento.consumido` (4002) | Information | `SqsConsumidorHostedService`, evento processado | `Tipo`, `EventoId`, `Fila` |
 | `evento.ignorado` (4003) | Warning | `SqsConsumidorHostedService`: status repetido, OS desconhecida (`OrdemServicoExcluida` ou `OrdemServicoRejeitada`) ou tipo que este serviço não trata (como `OrdemServicoAberta`). A mensagem é apagada. Antes dele, um log `Information` sem `EventId` explica o motivo, quando o evento é de uma OS | `Tipo`, `EventoId`, `Fila` |
@@ -38,6 +39,7 @@ Logs sem `EventId` que ajudam no diagnóstico do pagamento:
 - `Information`: notificação ignorada (tipo diferente de `payment`, pagamento desconhecido no Mercado Pago ou OS sem cobrança aguardando confirmação).
 - `Warning`: pagamento aprovado sem orçamento `AguardandoPagamento` ("PagamentoAprovado nao publicado").
 - `Error`: falha inesperada ao processar uma notificação (a resposta continua 200).
+- Só localmente (com `DynamoDbSettings:ServiceUrl`), ao subir: `Information` com a tabela do histórico criada ou já existente no DynamoDB Local, ou `Warning` se não conseguir criá-la (a API sobe mesmo assim).
 
 O Billing não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o status da OS é do OS Service.
 
@@ -53,8 +55,8 @@ O Billing não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o sta
 | `pagamento_notificacao` | `POST /api/pagamentos/notificacoes` (webhook do Mercado Pago) |
 
 - `TipoFalha`: `regra_negocio` (resposta 400) e `nao_encontrado` (resposta 404). Na notificação, a resposta é sempre 200.
-- `Integracao`: `resend` (e-mail do orçamento), `mercadopago`, `sqs` e `postgres` (banco indisponível).
-- `Operacao`: `envio_orcamento` (Resend), `criacao_cobranca` e `consulta_pagamento` (Mercado Pago), `publicacao` e `consumo` (SQS).
+- `Integracao`: `resend` (e-mail do orçamento), `mercadopago`, `sqs`, `dynamodb` (histórico de pagamentos) e `postgres` (banco indisponível).
+- `Operacao`: `envio_orcamento` (Resend), `criacao_cobranca` e `consulta_pagamento` (Mercado Pago), `publicacao` e `consumo` (SQS), `registro_historico` (Warning) e `consulta_historico` (Error) (DynamoDB).
 - Sem a chave do Resend, `/enviar` responde 400 e gera `os.falha` (`orcamento_envio`), não `integracao.falha`.
 
 ## 4. Health checks
@@ -64,13 +66,13 @@ O Billing não emite `os.criada`, `os.status_alterado` nem `os.encerrada`: o sta
 | `/health` | Não | Probes do Kubernetes, NLB (target group `techchallenge-oficina-billing`), `HEALTHCHECK` do Dockerfile e o synthetic `GET /billing/health` pelo API Gateway |
 | `/health/ready` | Sim (check `postgres`, tag `ready`): `Healthy` (200) ou `Unhealthy` (503) | Só o `http_check` do Datadog Agent, na instância `billing-api` (`http://billing-api.billing.svc.cluster.local/health/ready`, service check `http.can_connect`) |
 
-Os dois são anônimos. O `readinessProbe` fica em `/health`, para uma queda do banco não tirar os pods do Service. Nenhum dos dois verifica o SQS, o Mercado Pago ou o Resend: as falhas deles aparecem no `integracao.falha`.
+Os dois são anônimos. O `readinessProbe` fica em `/health`, para uma queda do banco não tirar os pods do Service. Nenhum dos dois verifica o SQS, o DynamoDB, o Mercado Pago ou o Resend: as falhas deles aparecem no `integracao.falha`.
 
 ## 5. O que o Datadog cobre deste serviço
 
 - **APM (R1 e R4):** latência p95 e 5xx por rota, por `service`, nos mesmos monitores da Management.
 - **Disponibilidade (R3):** `http.can_connect` do `billing-api` e o synthetic `GET /billing/health`, que entra no SLO de uptime.
-- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`, inclusive `mercadopago`) somam os eventos dos quatro serviços; o monitor de erros de integração também alerta para o Billing. Os eventos `os.orcamento_*`, `pagamento.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
+- **Métricas de log (R7):** `oficina.os.falhas` (por `etapa` e `tipo_falha`) e `oficina.integracao.erros` (por `integracao`, inclusive `mercadopago` e `dynamodb`) somam os eventos dos quatro serviços; o monitor de erros de integração também alerta para o Billing. O filtro da métrica (`@Integracao:*`) já conta as falhas do DynamoDB, inclusive o `Warning` do registro do histórico; não há métricas nem monitores específicos do DynamoDB. Os eventos `os.orcamento_*`, `pagamento.*` e `evento.*` não geram métricas: são consultados no Log Explorer.
 - **Limitação:** os monitores e os widgets de Kubernetes (CPU, memória, CrashLoopBackOff, restarts e réplicas indisponíveis) filtram só o namespace `oficina` (`kube_namespace:oficina`). Os pods deste serviço ficam de fora deles.
 
 ## 6. Consultas úteis
@@ -86,6 +88,8 @@ No Log Explorer do Datadog:
 | Pagamentos aprovados | `@evento:pagamento.aprovado` |
 | Uso do modo simulado | `@evento:pagamento.simulado` |
 | Falhas no Mercado Pago | `@Integracao:mercadopago` |
+| Falhas no histórico de pagamentos (DynamoDB) | `@Integracao:dynamodb service:billing-api` |
+| Linhas que faltam no histórico | `@Integracao:dynamodb @Operacao:registro_historico` |
 | Eventos publicados (um por fila) | `@evento:evento.publicado service:billing-api` |
 | Eventos ignorados | `@evento:evento.ignorado service:billing-api` |
 | Pagamento aprovado sem evento publicado | `service:billing-api "PagamentoAprovado nao publicado"` |

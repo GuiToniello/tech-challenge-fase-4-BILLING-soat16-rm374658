@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       working-directory:
-        description: "Pasta do Terraform (hoje só DB/infra, o RDS do Billing)"
+        description: "Pasta do Terraform (hoje só DB/infra: o RDS do Billing, a tabela DynamoDB do histórico de pagamentos e a política IAM dela)"
         required: true
         type: string
       command:

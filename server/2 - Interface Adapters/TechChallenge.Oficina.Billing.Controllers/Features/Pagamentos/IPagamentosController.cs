@@ -6,6 +6,8 @@ namespace TechChallenge.Oficina.Billing.Controllers.Features.Pagamentos
 
         Task<object> Verificar(Guid ordemServicoId, CancellationToken cancellationToken);
 
+        Task<object> GetHistorico(Guid ordemServicoId, CancellationToken cancellationToken);
+
         // tipo e recursoId lidos da notificacao do Mercado Pago (type/topic e data.id/id)
         Task<object> ReceberNotificacao(string? tipo, string? recursoId, CancellationToken cancellationToken);
     }

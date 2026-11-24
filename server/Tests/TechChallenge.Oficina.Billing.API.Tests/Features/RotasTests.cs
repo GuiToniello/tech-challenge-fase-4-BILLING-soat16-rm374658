@@ -42,6 +42,7 @@ public sealed class RotasTests
             {
                 "GET /api/orcamentos/{ordemServicoId:guid}",
                 "GET /api/pagamentos/{ordemServicoId:guid}",
+                "GET /api/pagamentos/{ordemServicoId:guid}/historico",
                 "POST /api/orcamentos/{ordemServicoId:guid}/aprovar",
                 "POST /api/orcamentos/{ordemServicoId:guid}/enviar",
                 "POST /api/orcamentos/{ordemServicoId:guid}/gerar",

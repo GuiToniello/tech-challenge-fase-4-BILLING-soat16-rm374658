@@ -1044,7 +1044,7 @@
     },
     {
       "name": "Pagamentos",
-      "description": "Cobranca do orcamento aprovado: consulta, verificacao no provedor (Mercado Pago ou simulado, que aprova na hora) e o webhook de notificacoes, anonimo e sempre 200.",
+      "description": "Cobranca do orcamento aprovado: consulta, verificacao no provedor (Mercado Pago ou simulado, que aprova na hora), o historico de pagamentos da OS (DynamoDB) e o webhook de notificacoes, anonimo e sempre 200.",
       "item": [
         {
           "name": "01 - Obter Pagamento da OS (200)",
@@ -1146,7 +1146,51 @@
           }
         },
         {
-          "name": "04 - Obter Orcamento apos Pagamento (200)",
+          "name": "04 - Obter Historico do Pagamento (200)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Status 200', function () { pm.response.to.have.status(200); });",
+                  "var historico = pm.response.json();",
+                  "pm.test('Historico e uma lista', function () { pm.expect(historico).to.be.an('array'); });",
+                  "var tipos = historico.map(function (evento) { return evento.tipo; });",
+                  "pm.test('Cobranca criada na aprovacao', function () { pm.expect(tipos).to.include('CobrancaCriada'); });",
+                  "pm.test('Eventos da OS em ordem cronologica', function () {",
+                  "  historico.forEach(function (evento, i) {",
+                  "    pm.expect(evento.ordemServicoId).to.eql(pm.collectionVariables.get('os_id'));",
+                  "    if (i > 0) { pm.expect(new Date(evento.ocorridoEm).getTime()).to.be.at.least(new Date(historico[i - 1].ocorridoEm).getTime()); }",
+                  "  });",
+                  "});",
+                  "// Simulado: a verificacao aprovou o pagamento. Mercado Pago: segue pendente ate o cliente pagar pelo link",
+                  "if (pm.collectionVariables.get('pagamento_status') === '2') {",
+                  "  pm.test('Pagamento aprovado no historico', function () { pm.expect(tipos).to.include('PagamentoAprovado'); });",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/pagamentos/{{os_id}}/historico",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "pagamentos",
+                "{{os_id}}",
+                "historico"
+              ]
+            }
+          }
+        },
+        {
+          "name": "05 - Obter Orcamento apos Pagamento (200)",
           "event": [
             {
               "listen": "test",
@@ -1178,7 +1222,7 @@
           }
         },
         {
-          "name": "05 - Acompanhamento da OS no OS Service (200)",
+          "name": "06 - Acompanhamento da OS no OS Service (200)",
           "event": [
             {
               "listen": "prerequest",
@@ -1223,7 +1267,7 @@
           }
         },
         {
-          "name": "06 - Obter Pagamento de OS sem Cobranca (404)",
+          "name": "07 - Obter Pagamento de OS sem Cobranca (404)",
           "event": [
             {
               "listen": "test",
@@ -1253,7 +1297,7 @@
           }
         },
         {
-          "name": "07 - Verificar Pagamento de OS sem Cobranca (404)",
+          "name": "08 - Verificar Pagamento de OS sem Cobranca (404)",
           "event": [
             {
               "listen": "test",
@@ -1283,7 +1327,7 @@
           }
         },
         {
-          "name": "08 - Notificacao com Id Falso (200, sem token)",
+          "name": "09 - Notificacao com Id Falso (200, sem token)",
           "event": [
             {
               "listen": "test",
@@ -1335,7 +1379,7 @@
           }
         },
         {
-          "name": "09 - Notificacao de Outro Tipo (200, ignorada)",
+          "name": "10 - Notificacao de Outro Tipo (200, ignorada)",
           "event": [
             {
               "listen": "test",
@@ -1377,7 +1421,7 @@
           }
         },
         {
-          "name": "10 - Verificar sem Token (401)",
+          "name": "11 - Verificar sem Token (401)",
           "event": [
             {
               "listen": "test",

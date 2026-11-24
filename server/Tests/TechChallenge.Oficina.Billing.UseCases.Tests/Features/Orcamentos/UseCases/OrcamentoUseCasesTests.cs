@@ -37,6 +37,7 @@ public sealed class OrcamentoUseCasesTests
     private readonly Mock<IOrcamentoEmailSender> _orcamentoEmailSenderMock = new();
     private readonly Mock<IEventosPublisher> _eventosPublisherMock = new();
     private readonly Mock<IGatewayPagamento> _gatewayPagamentoMock = new();
+    private readonly Mock<IHistoricoPagamentoGateway> _historicoPagamentoGatewayMock = new();
     private readonly Mock<IOrcamentoUseCasesFacade> _facadeMock = new();
 
     private static IMapper CriarMapper()
@@ -54,6 +55,7 @@ public sealed class OrcamentoUseCasesTests
         _facadeMock.SetupGet(f => f.OrcamentoEmailSender).Returns(_orcamentoEmailSenderMock.Object);
         _facadeMock.SetupGet(f => f.EventosPublisher).Returns(_eventosPublisherMock.Object);
         _facadeMock.SetupGet(f => f.GatewayPagamento).Returns(_gatewayPagamentoMock.Object);
+        _facadeMock.SetupGet(f => f.HistoricoPagamentoGateway).Returns(_historicoPagamentoGatewayMock.Object);
 
         return new OrcamentoUseCases(
             Mapper,
@@ -123,6 +125,7 @@ public sealed class OrcamentoUseCasesTests
         _gatewayPagamentoMock.Verify(g => g.CriarCobrancaAsync(It.IsAny<NovaCobranca>(), It.IsAny<CancellationToken>()), Times.Never);
         _pagamentoGatewayMock.Verify(g => g.AdicionarAsync(It.IsAny<Pagamento>(), It.IsAny<CancellationToken>()), Times.Never);
         _orcamentoGatewayMock.Verify(g => g.AtualizarAsync(It.IsAny<Orcamento>(), It.IsAny<CancellationToken>()), Times.Never);
+        Assert.Empty(_historicoPagamentoGatewayMock.Invocations);
     }
 
     [Fact]
@@ -409,6 +412,44 @@ public sealed class OrcamentoUseCasesTests
         Assert.Equal(LogLevel.Information, nivel);
         Assert.Equal(referencia.Id, propriedades["OrdemServicoId"]);
         Assert.Equal(pagamentoGravado.Id, propriedades["PagamentoId"]);
+        _historicoPagamentoGatewayMock.Verify(h => h.RegistrarAsync(
+            It.Is<EventoHistoricoPagamento>(evento =>
+                evento.OrdemServicoId == referencia.Id &&
+                evento.Tipo == TiposHistoricoPagamento.CobrancaCriada &&
+                evento.Origem == OrigensHistoricoPagamento.Aprovacao &&
+                evento.PagamentoId == pagamentoGravado.Id &&
+                evento.Provedor == "MercadoPago" &&
+                evento.Valor == 50m &&
+                evento.PreferenciaId == "pref-1" &&
+                evento.PagamentoExternoId == null &&
+                evento.OcorridoEm.Kind == DateTimeKind.Utc),
+            CancellationToken.None), Times.Once);
+    }
+
+    [Fact]
+    public async Task AprovarAsync_DeveRegistrarCobrancaCriadaNoHistoricoDepoisDaGravacao()
+    {
+        var useCases = CriarUseCases();
+        var referencia = CriarReferencia(StatusOrdemServico.AguardandoAprovacao);
+        CriarOrcamento(referencia);
+        ConfigurarCobranca();
+        var ordem = new List<string>();
+        _pagamentoGatewayMock
+            .Setup(g => g.AdicionarAsync(It.IsAny<Pagamento>(), It.IsAny<CancellationToken>()))
+            .Callback(() => ordem.Add("pagamento"))
+            .Returns(Task.CompletedTask);
+        _orcamentoGatewayMock
+            .Setup(g => g.AtualizarAsync(It.IsAny<Orcamento>(), It.IsAny<CancellationToken>()))
+            .Callback(() => ordem.Add("orcamento"))
+            .Returns(Task.CompletedTask);
+        _historicoPagamentoGatewayMock
+            .Setup(h => h.RegistrarAsync(It.IsAny<EventoHistoricoPagamento>(), It.IsAny<CancellationToken>()))
+            .Callback<EventoHistoricoPagamento, CancellationToken>((evento, _) => ordem.Add(evento.Tipo))
+            .Returns(Task.CompletedTask);
+
+        await useCases.AprovarAsync(new AprovarOrcamentoCommand { OrdemServicoId = referencia.Id });
+
+        Assert.Equal(["pagamento", "orcamento", TiposHistoricoPagamento.CobrancaCriada], ordem);
     }
 
     [Fact]
@@ -425,6 +466,7 @@ public sealed class OrcamentoUseCasesTests
         Assert.Equal(pagamento.LinkPagamento, resultado.Pagamento.LinkPagamento);
         Assert.Equal((int)StatusOrcamento.AguardandoPagamento, resultado.Orcamento.Status);
         VerificarSemCobrancaNemGravacao();
+        Assert.Empty(_historicoPagamentoGatewayMock.Invocations);
     }
 
     [Fact]

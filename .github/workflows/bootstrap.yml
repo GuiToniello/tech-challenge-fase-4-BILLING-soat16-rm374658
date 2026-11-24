@@ -1,7 +1,8 @@
 name: Bootstrap
-# Sobe o Billing, na ordem: testes → RDS (DB/infra) → imagem no ECR → manifests.
+# Sobe o Billing, na ordem: testes → RDS, tabela DynamoDB e política IAM (DB/infra) → imagem no ECR → manifests.
 # Requer o Bootstrap do repo MANAGEMENT antes: ele cria a VPC, o EKS, o API Gateway (rota /billing e a rota
-# pública do webhook do Mercado Pago), as filas SQS e a chave de acesso do Billing no SSM, que este repo só usa.
+# pública do webhook do Mercado Pago), as filas SQS e o usuário IAM do Billing com a chave de acesso no SSM,
+# que este repo só usa (o DB/infra daqui só anexa a esse usuário a política da tabela DynamoDB).
 # Ordem entre os repos: MANAGEMENT → este, a qualquer momento (não depende do OS-SERVICE nem do EXECUTION, que sobem
 # nesta ordem: OS-SERVICE → EXECUTION) → LAMBDA.
 # Use na primeira criação, para recriar depois do Destroy ou para reaplicar a HEAD da main.
@@ -17,7 +18,8 @@ jobs:
   build-test:
     uses: ./.github/workflows/_build-test.yml
 
-  # O RDS usa a VPC, as subnets privadas e o SG dos nodes criados pelo repo MANAGEMENT
+  # O RDS usa a VPC, as subnets privadas e o SG dos nodes criados pelo repo MANAGEMENT, e a política
+  # da tabela DynamoDB vai para o usuário IAM do Billing, também criado por ele
   terraform-db:
     needs: build-test
     uses: ./.github/workflows/_terraform.yml

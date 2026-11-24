@@ -61,6 +61,15 @@ namespace TechChallenge.Oficina.Billing.Controllers.Features.Pagamentos
             }
         }
 
+        // Falha do DynamoDB ja sai como integracao.falha no gateway do historico e segue para o tratamento global (500)
+        public async Task<object> GetHistorico(Guid ordemServicoId, CancellationToken cancellationToken)
+        {
+            var historico = await _pagamentoUseCases.ListarHistoricoAsync(ordemServicoId, cancellationToken);
+            var result = PagamentosResult.From(historico);
+
+            return _pagamentosAdapter.Adapt(result);
+        }
+
         // Sempre responde 200: a situacao real e consultada no provedor e, se o processamento falhar, o pagamento ainda pode ser conferido em /verificar
         public async Task<object> ReceberNotificacao(string? tipo, string? recursoId, CancellationToken cancellationToken)
         {

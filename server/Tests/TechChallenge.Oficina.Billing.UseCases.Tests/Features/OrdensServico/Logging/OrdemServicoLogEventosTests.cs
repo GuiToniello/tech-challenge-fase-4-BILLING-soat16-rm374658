@@ -53,14 +53,19 @@ public sealed class OrdemServicoLogEventosTests
                 OrdemServicoLogEventos.Etapas.OrcamentoRecusa, OrdemServicoLogEventos.Etapas.PagamentoVerificacao, OrdemServicoLogEventos.Etapas.PagamentoNotificacao
             });
         Assert.Equal(
-            ["resend", "mercadopago", "sqs", "postgres"],
-            new[] { OrdemServicoLogEventos.Integracoes.Resend, OrdemServicoLogEventos.Integracoes.MercadoPago, OrdemServicoLogEventos.Integracoes.Sqs, OrdemServicoLogEventos.Integracoes.Postgres });
+            ["resend", "mercadopago", "sqs", "postgres", "dynamodb"],
+            new[]
+            {
+                OrdemServicoLogEventos.Integracoes.Resend, OrdemServicoLogEventos.Integracoes.MercadoPago, OrdemServicoLogEventos.Integracoes.Sqs,
+                OrdemServicoLogEventos.Integracoes.Postgres, OrdemServicoLogEventos.Integracoes.DynamoDb
+            });
         Assert.Equal(
-            ["envio_orcamento", "criacao_cobranca", "consulta_pagamento", "publicacao", "consumo"],
+            ["envio_orcamento", "criacao_cobranca", "consulta_pagamento", "publicacao", "consumo", "registro_historico", "consulta_historico"],
             new[]
             {
                 OrdemServicoLogEventos.Operacoes.EnvioOrcamento, OrdemServicoLogEventos.Operacoes.CriacaoCobranca, OrdemServicoLogEventos.Operacoes.ConsultaPagamento,
-                OrdemServicoLogEventos.Operacoes.Publicacao, OrdemServicoLogEventos.Operacoes.Consumo
+                OrdemServicoLogEventos.Operacoes.Publicacao, OrdemServicoLogEventos.Operacoes.Consumo, OrdemServicoLogEventos.Operacoes.RegistroHistorico,
+                OrdemServicoLogEventos.Operacoes.ConsultaHistorico
             });
     }
 }

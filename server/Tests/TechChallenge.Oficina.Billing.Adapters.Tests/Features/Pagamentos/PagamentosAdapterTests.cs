@@ -51,6 +51,35 @@ public sealed class PagamentosAdapterTests
     }
 
     [Fact]
+    public void Adapt_DeveRetornarOkComOHistorico_QuandoListaSucesso()
+    {
+        IReadOnlyCollection<EventoHistoricoPagamentoViewModel> historico = [new EventoHistoricoPagamentoViewModel { Tipo = "CobrancaCriada" }];
+
+        var adaptado = _adapter.Adapt(new PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception>(historico));
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(adaptado);
+        Assert.Same(historico, ok.Value);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarOkComListaVazia_QuandoSemHistorico()
+    {
+        var adaptado = _adapter.Adapt(new PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception>(Array.Empty<EventoHistoricoPagamentoViewModel>()));
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(adaptado);
+        Assert.Empty(ok.Value!);
+    }
+
+    [Fact]
+    public void Adapt_DeveRetornarProblem_QuandoFalhaNaConsultaDoHistorico()
+    {
+        var adaptado = _adapter.Adapt(new PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception>(new InvalidOperationException("falha")));
+
+        var statusCode = Assert.IsAssignableFrom<IStatusCodeHttpResult>(adaptado);
+        Assert.Equal(StatusCodes.Status500InternalServerError, statusCode.StatusCode);
+    }
+
+    [Fact]
     public void Recebido_DeveRetornarOkSemCorpo()
     {
         var adaptado = _adapter.Recebido();

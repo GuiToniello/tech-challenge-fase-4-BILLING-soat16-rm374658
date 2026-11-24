@@ -4,6 +4,7 @@
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.DB/TechChallenge.Oficina.Billing.DB.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Email/TechChallenge.Oficina.Billing.Email.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Messaging/TechChallenge.Oficina.Billing.Messaging.csproj" />
+    <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.NoSql/TechChallenge.Oficina.Billing.NoSql.csproj" />
     <Project Path="1 - Frameworks &amp; Drivers/TechChallenge.Oficina.Billing.Pagamentos/TechChallenge.Oficina.Billing.Pagamentos.csproj" />
   </Folder>
   <Folder Name="/2 - Interface Adapters/">
@@ -19,6 +20,7 @@
   <Folder Name="/ADR/">
     <File Path="../docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md" />
     <File Path="../docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md" />
+    <File Path="../docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md" />
   </Folder>
   <Folder Name="/E2E/">
     <File Path="../e2e/TechChallenge.Oficina.Billing.API.postman_collection.json" />
@@ -33,6 +35,7 @@
     <Project Path="Tests/TechChallenge.Oficina.Billing.DB.Tests/TechChallenge.Oficina.Billing.DB.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Billing.Email.Tests/TechChallenge.Oficina.Billing.Email.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Billing.Messaging.Tests/TechChallenge.Oficina.Billing.Messaging.Tests.csproj" />
+    <Project Path="Tests/TechChallenge.Oficina.Billing.NoSql.Tests/TechChallenge.Oficina.Billing.NoSql.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Billing.Pagamentos.Tests/TechChallenge.Oficina.Billing.Pagamentos.Tests.csproj" />
     <Project Path="Tests/TechChallenge.Oficina.Billing.Integration.Tests/TechChallenge.Oficina.Billing.Integration.Tests.csproj" />
   </Folder>

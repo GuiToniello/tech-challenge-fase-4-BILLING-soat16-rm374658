@@ -16,6 +16,7 @@ namespace TechChallenge.Oficina.Billing.UseCases.Features.Pagamentos.UseCases;
 
 // Acompanha a cobranca no provedor: pela verificacao manual (/verificar) ou pela notificacao do Mercado Pago (webhook).
 // A situacao sempre e consultada no provedor (a notificacao so informa o id), e o PagamentoAprovado e publicado uma unica vez.
+// Cada verificacao e notificacao processada vai para o historico de pagamentos (DynamoDB), sempre depois da gravacao e da publicacao.
 public sealed class PagamentoUseCases : IPagamentoUseCases
 {
     private readonly IMapper _mapper;
@@ -23,6 +24,7 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
     private readonly IOrcamentoGateway _orcamentoGateway;
     private readonly IGatewayPagamento _gatewayPagamento;
     private readonly IEventosPublisher _eventosPublisher;
+    private readonly IHistoricoPagamentoGateway _historicoPagamentoGateway;
     private readonly ILogger<PagamentoUseCases> _logger;
 
     public PagamentoUseCases(
@@ -31,6 +33,7 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
         IOrcamentoGateway orcamentoGateway,
         IGatewayPagamento gatewayPagamento,
         IEventosPublisher eventosPublisher,
+        IHistoricoPagamentoGateway historicoPagamentoGateway,
         ILogger<PagamentoUseCases> logger)
     {
         _mapper = mapper;
@@ -38,6 +41,7 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
         _orcamentoGateway = orcamentoGateway;
         _gatewayPagamento = gatewayPagamento;
         _eventosPublisher = eventosPublisher;
+        _historicoPagamentoGateway = historicoPagamentoGateway;
         _logger = logger;
     }
 
@@ -51,7 +55,7 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
     {
         var pagamento = await ObterUltimoPagamentoExistenteAsync(command.OrdemServicoId, cancellationToken);
 
-        // Ja aprovado: nada a consultar nem a publicar de novo
+        // Ja aprovado: nada a consultar, publicar ou registrar de novo
         if (pagamento.Status != StatusPagamento.Aprovado)
         {
             var situacao = await _gatewayPagamento.ConsultarPorReferenciaAsync(pagamento.OrdemServicoId, cancellationToken);
@@ -60,6 +64,9 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
             {
                 await AplicarSituacaoAsync(pagamento, situacao, cancellationToken);
             }
+
+            // Sem pagamento no provedor (situacao nula) a cobranca segue pendente
+            await RegistrarResultadoAsync(pagamento, OrigensHistoricoPagamento.Verificacao, situacao?.PagamentoExternoId);
         }
 
         return _mapper.Map<PagamentoViewModel>(pagamento);
@@ -67,6 +74,7 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
 
     public async Task ProcessarNotificacaoAsync(string pagamentoExternoId, CancellationToken cancellationToken = default)
     {
+        var recebidaEm = DateTime.UtcNow;
         var situacao = await _gatewayPagamento.ConsultarPorIdAsync(pagamentoExternoId, cancellationToken);
 
         if (situacao is null)
@@ -83,10 +91,31 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
                 "Notificacao do pagamento externo {PagamentoExternoId} ignorada: a ordem de servico {OrdemServicoId} nao tem cobranca aguardando confirmacao.",
                 pagamentoExternoId,
                 situacao.OrdemServicoId);
+
+            // Notificacao repetida de pagamento ja aprovado: fica no historico, sem novo resultado
+            if (pagamento is not null)
+            {
+                await RegistrarHistoricoAsync(pagamento, TiposHistoricoPagamento.NotificacaoRecebida, OrigensHistoricoPagamento.Notificacao, situacao.PagamentoExternoId, recebidaEm);
+            }
+
             return;
         }
 
         await AplicarSituacaoAsync(pagamento, situacao, cancellationToken);
+
+        // A notificacao fica com o horario em que chegou; o resultado e registrado depois dela
+        await RegistrarHistoricoAsync(pagamento, TiposHistoricoPagamento.NotificacaoRecebida, OrigensHistoricoPagamento.Notificacao, situacao.PagamentoExternoId, recebidaEm);
+        await RegistrarResultadoAsync(pagamento, OrigensHistoricoPagamento.Notificacao, situacao.PagamentoExternoId);
+    }
+
+    public async Task<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>> ListarHistoricoAsync(Guid ordemServicoId, CancellationToken cancellationToken = default)
+    {
+        var historico = await _historicoPagamentoGateway.ListarAsync(ordemServicoId, cancellationToken);
+
+        return historico
+            .OrderBy(evento => evento.OcorridoEm)
+            .Select(evento => _mapper.Map<EventoHistoricoPagamentoViewModel>(evento))
+            .ToArray();
     }
 
     private async Task AplicarSituacaoAsync(Pagamento pagamento, SituacaoPagamentoExterno situacao, CancellationToken cancellationToken)
@@ -159,6 +188,36 @@ public sealed class PagamentoUseCases : IPagamentoUseCases
         await _eventosPublisher.PublicarAsync(
             new PagamentoAprovado(pagamento.OrdemServicoId, pagamento.Id, pagamento.Valor),
             pagamento.OrdemServicoId,
+            CancellationToken.None);
+    }
+
+    // Resultado da verificacao ou da notificacao: o status da cobranca depois de aplicada a situacao do provedor
+    private Task RegistrarResultadoAsync(Pagamento pagamento, string origem, string? pagamentoExternoId)
+    {
+        var tipo = pagamento.Status switch
+        {
+            StatusPagamento.Aprovado => TiposHistoricoPagamento.PagamentoAprovado,
+            StatusPagamento.Recusado => TiposHistoricoPagamento.PagamentoRecusado,
+            _ => TiposHistoricoPagamento.PagamentoPendente
+        };
+
+        return RegistrarHistoricoAsync(pagamento, tipo, origem, pagamentoExternoId ?? pagamento.PagamentoExternoId);
+    }
+
+    // Best-effort (o gateway nao lanca) e sem o token da requisicao: chamado so depois da gravacao e da publicacao do evento
+    private Task RegistrarHistoricoAsync(Pagamento pagamento, string tipo, string origem, string? pagamentoExternoId, DateTime? ocorridoEm = null)
+    {
+        return _historicoPagamentoGateway.RegistrarAsync(
+            new EventoHistoricoPagamento(
+                pagamento.OrdemServicoId,
+                ocorridoEm ?? DateTime.UtcNow,
+                tipo,
+                origem,
+                pagamento.Id,
+                pagamento.Provedor.ToString(),
+                pagamento.Valor,
+                pagamentoExternoId,
+                null),
             CancellationToken.None);
     }
 

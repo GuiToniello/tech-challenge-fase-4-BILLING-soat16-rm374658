@@ -17,13 +17,14 @@ using TechChallenge.Oficina.Billing.UseCases.Features.Eventos.UseCases;
 using TechChallenge.Oficina.Billing.UseCases.Features.Orcamentos.Mappings;
 using TechChallenge.Oficina.Billing.UseCases.Features.Orcamentos.UseCases;
 using TechChallenge.Oficina.Billing.UseCases.Features.OrdensServico.UseCases;
+using TechChallenge.Oficina.Billing.UseCases.Features.Pagamentos.Interfaces;
 using TechChallenge.Oficina.Billing.UseCases.Features.Pagamentos.UseCases;
 
 namespace TechChallenge.Oficina.Billing.Integration.Tests.Infrastructure;
 
 /// <summary>
 /// Fixture de integração: DI real com EF Core InMemory e o gateway de pagamento simulado (Mercado Pago sem access token).
-/// Só as integrações externas são mock: publicação de eventos no SQS e envio de emails pelo Resend.
+/// Só as integrações externas são substituídas: publicação de eventos no SQS e envio de emails pelo Resend (mocks) e o histórico de pagamentos no DynamoDB (lista em memória).
 /// Cada instância possui banco de dados isolado (nome único por GUID) e cada controller é obtido de um escopo novo, como numa requisição.
 /// </summary>
 public sealed class IntegrationTestFixture : IDisposable
@@ -49,6 +50,7 @@ public sealed class IntegrationTestFixture : IDisposable
             .Returns(Task.CompletedTask);
         services.AddSingleton(EventosPublisherMock.Object);
         services.AddSingleton(OrcamentoEmailSenderMock.Object);
+        services.AddSingleton<IHistoricoPagamentoGateway>(HistoricoPagamento);
         services.AddInfraPagamentos(new MercadoPagoSettings());
 
         services.AddAutoMapper(_ => { }, typeof(OrcamentoProfile).Assembly);
@@ -67,6 +69,7 @@ public sealed class IntegrationTestFixture : IDisposable
 
     public Mock<IEventosPublisher> EventosPublisherMock { get; } = new();
     public Mock<IOrcamentoEmailSender> OrcamentoEmailSenderMock { get; } = new();
+    public HistoricoPagamentoEmMemoria HistoricoPagamento { get; } = new();
 
     private T Obter<T>() where T : notnull
     {

@@ -23,6 +23,7 @@
     <ProjectReference Include="..\TechChallenge.Oficina.Billing.DB\TechChallenge.Oficina.Billing.DB.csproj" />
     <ProjectReference Include="..\TechChallenge.Oficina.Billing.Email\TechChallenge.Oficina.Billing.Email.csproj" />
     <ProjectReference Include="..\TechChallenge.Oficina.Billing.Messaging\TechChallenge.Oficina.Billing.Messaging.csproj" />
+    <ProjectReference Include="..\TechChallenge.Oficina.Billing.NoSql\TechChallenge.Oficina.Billing.NoSql.csproj" />
     <ProjectReference Include="..\TechChallenge.Oficina.Billing.Pagamentos\TechChallenge.Oficina.Billing.Pagamentos.csproj" />
     <ProjectReference Include="..\..\2 - Interface Adapters\TechChallenge.Oficina.Billing.Controllers\TechChallenge.Oficina.Billing.Controllers.csproj" />
     <ProjectReference Include="..\..\2 - Interface Adapters\TechChallenge.Oficina.Billing.Adapters\TechChallenge.Oficina.Billing.Adapters.csproj" />

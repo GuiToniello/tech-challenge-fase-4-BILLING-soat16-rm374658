@@ -17,6 +17,16 @@ namespace TechChallenge.Oficina.Billing.Adapters.Features.Pagamentos
             return CriaErro(result.Error!);
         }
 
+        public object Adapt(PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception> result)
+        {
+            if (result.Value != null)
+            {
+                return TypedResults.Ok(result.Value);
+            }
+
+            return CriaErro(result.Error!);
+        }
+
         public object Recebido()
         {
             return TypedResults.Ok();

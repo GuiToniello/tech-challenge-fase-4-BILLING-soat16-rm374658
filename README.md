@@ -13,7 +13,7 @@ O sistema tem cinco repositórios:
 - [EXECUTION](https://github.com/GuiToniello/tech-challenge-fase-4-EXECUTION-AND-PRODUCTION-soat16-rm374658): Execução e Produção, com banco próprio: a fila de produção da oficina, o diagnóstico e a execução da OS. Não troca eventos com este serviço: o Billing não publica na fila dele, e ele só publica para o OS Service.
 - [LAMBDA](https://github.com/GuiToniello/tech-challenge-fase-4-LAMBDA-soat16-rm374658): autenticação (Lambda authorizer e `POST /auth/token`).
 
-Os serviços se comunicam só por eventos no Amazon SQS ([ADR-020](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro. Além do SQS, este serviço só chama serviços externos: o Mercado Pago (pagamentos) e o Resend (e-mail).
+Os serviços se comunicam só por eventos no Amazon SQS ([ADR-020](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/ADR-020-Eventos-com-SQS-e-Saga-Coreografada.md)): não há chamadas HTTP entre as APIs, e nenhum serviço lê o banco do outro. Além do SQS e do Amazon DynamoDB (histórico de pagamentos, [ADR-024](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)), este serviço só chama serviços externos: o Mercado Pago (pagamentos) e o Resend (e-mail).
 
 Grupo:
 -  Guilherme Toniello Vieira -  SOAT16 - rm374658
@@ -24,11 +24,11 @@ Grupo:
 /
 ├── server/               Solução .NET: Billing, camadas da Clean Architecture e testes
 ├── e2e/                  Collection do Postman (orçamentos e pagamentos) e environment da AWS
-├── docker-compose.yml    Postgres + ElasticMQ (SQS local) + Billing para rodar localmente
+├── docker-compose.yml    Postgres + ElasticMQ (SQS local) + DynamoDB Local + Billing para rodar localmente
 ├── elasticmq.conf        Filas FIFO do ElasticMQ, as mesmas do SQS na AWS
-├── DB/infra/             Terraform do Amazon RDS PostgreSQL do Billing
+├── DB/infra/             Terraform do Amazon RDS PostgreSQL e da tabela DynamoDB do Billing
 ├── kubernetes/k8s/       Manifests Kubernetes do Billing (Kustomize)
-├── docs/                 ADR-021, ADR-022 e observabilidade
+├── docs/                 ADR-021, ADR-022, ADR-024 e observabilidade
 └── .github/workflows/    Pipelines (build, testes, imagem, Terraform do banco e deploy no cluster)
 ```
 
@@ -36,9 +36,9 @@ Grupo:
 |---|---|---|
 | [server/](./server/) | Código .NET 10 da `TechChallenge.Oficina.Billing.API` e testes | Seções 2 a 5 deste README |
 | [e2e/](./e2e/) | Collection do Postman e environment da AWS | Seção 8 |
-| [DB/infra/](./DB/infra/) | Amazon RDS PostgreSQL (state `techchallenge-oficina/fase-4/billing-database.tfstate`) | Seção 6 |
+| [DB/infra/](./DB/infra/) | Amazon RDS PostgreSQL, tabela DynamoDB do histórico de pagamentos e a política IAM dela (state `techchallenge-oficina/fase-4/billing-database.tfstate`) | Seção 6 |
 | [kubernetes/k8s/](./kubernetes/k8s/) | Namespace, ConfigMap, Secret, Deployment, Service e HPA do `billing-api` | Seção 6 |
-| [docs/](./docs/) | [ADR-021](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md), [ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md) e o [contrato de observabilidade](./docs/observabilidade.md) deste serviço | Seção 9 |
+| [docs/](./docs/) | [ADR-021](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md), [ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md), [ADR-024](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) e o [contrato de observabilidade](./docs/observabilidade.md) deste serviço | Seção 9 |
 | [.github/workflows/](./.github/workflows/) | Bootstrap, Deploy, Destroy e K8s Apply | [.github/workflows/README.md](./.github/workflows/README.md) |
 
 ## 2. Arquitetura
@@ -55,6 +55,7 @@ flowchart LR
     Messaging[TechChallenge.Oficina.Billing.Messaging\nAmazon SQS]
     Email[TechChallenge.Oficina.Billing.Email\nResend]
     Pagamentos[TechChallenge.Oficina.Billing.Pagamentos\nMercado Pago]
+    NoSql[TechChallenge.Oficina.Billing.NoSql\nAmazon DynamoDB]
   end
   subgraph IA[2 - Interface Adapters]
     Controllers[TechChallenge.Oficina.Billing.Controllers]
@@ -73,6 +74,7 @@ flowchart LR
   DB --> UseCases
   Email --> UseCases
   Pagamentos --> UseCases
+  NoSql --> UseCases
   Messaging --> Controllers
   Messaging --> UseCases
   Controllers --> UseCases
@@ -86,6 +88,7 @@ Os padrões são os mesmos da Management: folder-by-feature, Gateways, Commands/
 | `IOrcamentoEmailSender` | Projeto `Email` (`OrcamentoEmailSender`, SDK do Resend) | Enviar o orçamento por e-mail |
 | `IGatewayPagamento` | Projeto `Pagamentos` (`GatewayPagamentoMercadoPago` ou `GatewayPagamentoSimulado`), o único com o SDK do Mercado Pago | Criar a cobrança e consultar o pagamento ([ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)) |
 | `IEventosPublisher` | Projeto `Messaging` (`EventosPublisher`, SDK do SQS) | Publicar os eventos nas filas dos outros serviços |
+| `IHistoricoPagamentoGateway` | Projeto `NoSql` (`HistoricoPagamentoGateway`, SDK do DynamoDB) | Gravar (*best-effort*) e consultar o histórico de pagamentos ([ADR-024](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) |
 
 O evento consumido entra pelo [EventosController](./server/2%20-%20Interface%20Adapters/TechChallenge.Oficina.Billing.Controllers/Features/Eventos/EventosController.cs), como uma requisição HTTP entra por um endpoint.
 
@@ -97,7 +100,7 @@ O evento consumido entra pelo [EventosController](./server/2%20-%20Interface%20A
 | Cobrança no Mercado Pago (Checkout Pro), verificação do pagamento e webhook | Validação da OS e débito de estoque depois do pagamento (Management) |
 | Snapshot da OS: dados validados pela Management e status vindo do OS Service | Ciclo de vida, status, histórico e indicadores da OS (OS Service) |
 | Registro das cobranças, mantido mesmo se a OS for excluída | E-mail de mudança de status (Management) |
-| | Fila de produção, diagnóstico e execução da OS (Execução e Produção) |
+| Histórico dos eventos de pagamento no DynamoDB, complementar ao registro das cobranças | Fila de produção, diagnóstico e execução da OS (Execução e Produção) |
 
 O Billing não guarda cadastros. Os serviços da OS, com nome e valor, o e-mail do cliente e a informação de estoque chegam prontos no evento `OrdemServicoValidada`, calculados pela Management.
 
@@ -114,6 +117,7 @@ As rotas ficam na raiz da API. Na AWS, ganham o prefixo `/billing` do API Gatewa
 | `POST /api/orcamentos/{ordemServicoId}/recusar` | 200 com o orçamento | Orçamento `Gerado` ou `AguardandoPagamento` e OS em `Recebida`, `EmDiagnostico` ou `AguardandoAprovacao`. Publica `OrcamentoRecusado` |
 | `GET /api/pagamentos/{ordemServicoId}` | 200 com a cobrança mais recente, ou 404 | — |
 | `POST /api/pagamentos/{ordemServicoId}/verificar` | 200 com a cobrança | 404 sem cobrança. Já aprovada: responde sem consultar. Senão, consulta o Mercado Pago; se aprovado, confirma o orçamento e publica `PagamentoAprovado` (uma vez) |
+| `GET /api/pagamentos/{ordemServicoId}/historico` | 200 com a lista de eventos (vazia se não houver) | Histórico no DynamoDB, em ordem cronológica: `CobrancaCriada` (aprovação), `NotificacaoRecebida` (webhook) e o resultado de cada verificação ou notificação (`PagamentoPendente`, `PagamentoAprovado` ou `PagamentoRecusado`). Os itens expiram em 180 dias. Falha no DynamoDB: 500 ([ADR-024](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)) |
 | `POST /api/pagamentos/notificacoes` | Sempre 200 | Webhook do Mercado Pago, anônimo. Só trata notificações de `payment` e consulta o pagamento no Mercado Pago pelo id |
 | `GET /health` e `GET /health/ready` | 200 (o ready responde 503 sem banco) | Anônimos; só o ready verifica o banco |
 
@@ -219,7 +223,7 @@ Detalhes oficiais: [documentação do Checkout Pro](https://www.mercadopago.com.
 ### 4.1 Pré-requisitos
 
 - Para rodar sem container: .NET SDK 10.x e um PostgreSQL.
-- Para containers: Docker ou Podman. O `docker-compose.yml` já traz o Postgres, o ElasticMQ e a API.
+- Para containers: Docker ou Podman. O `docker-compose.yml` já traz o Postgres, o ElasticMQ, o DynamoDB Local e a API.
 
 Portas usadas, diferentes das da Management (7194), do OS Service (7195) e do Execução e Produção (7197), para os quatro serviços rodarem juntos:
 
@@ -227,22 +231,23 @@ Portas usadas, diferentes das da Management (7194), do OS Service (7195) e do Ex
 |---|---|
 | Postgres (`oficina-billing-postgres`) | `5434` |
 | ElasticMQ (`oficina-billing-elasticmq`) | `9326` |
+| DynamoDB Local (`oficina-billing-dynamodb`) | `8000` |
 | Billing (`oficina-billing-api`) | `7196` |
 
-Para mudar as portas ou ligar o Mercado Pago e o Resend, crie o `.env` a partir do exemplo (`Copy-Item .env.example .env` no PowerShell, `cp .env.example .env` no Linux/macOS) e ajuste `POSTGRES_PORT`, `ELASTICMQ_PORT`, `API_BILLING_PORT`, `DATABASE_CONNECTION_STRING` e, opcionais, `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_NOTIFICATION_URL` e `RESEND_API_KEY`.
+Para mudar as portas ou ligar o Mercado Pago e o Resend, crie o `.env` a partir do exemplo (`Copy-Item .env.example .env` no PowerShell, `cp .env.example .env` no Linux/macOS) e ajuste `POSTGRES_PORT`, `ELASTICMQ_PORT`, `DYNAMODB_PORT`, `API_BILLING_PORT`, `DATABASE_CONNECTION_STRING` e, opcionais, `MERCADOPAGO_ACCESS_TOKEN`, `MERCADOPAGO_NOTIFICATION_URL` e `RESEND_API_KEY`.
 
 ### 4.2 Containers
 
-Na raiz do repositório, rode `docker compose up -d --build` (ou `podman compose up -d --build`). Sobem o `postgres`, o `elasticmq` (com as seis filas FIFO do `elasticmq.conf`: as três que o Billing usa, a dele e as do OS Service e da Management, e as DLQs) e o `billing-api`. O Swagger fica em `http://localhost:7196/index.html`.
+Na raiz do repositório, rode `docker compose up -d --build` (ou `podman compose up -d --build`). Sobem o `postgres`, o `elasticmq` (com as seis filas FIFO do `elasticmq.conf`: as três que o Billing usa, a dele e as do OS Service e da Management, e as DLQs), o `dynamodb-local` (em memória; a API cria a tabela do histórico de pagamentos ao subir) e o `billing-api`. O Swagger fica em `http://localhost:7196/index.html`.
 
 Sem `MERCADOPAGO_ACCESS_TOKEN`, o pagamento roda no modo simulado (seção 3.1). Sem `RESEND_API_KEY`, o envio do orçamento por e-mail responde 400.
 
 ### 4.3 `dotnet run`
 
-1. Suba o banco e o SQS local: `docker compose up -d postgres elasticmq`.
+1. Suba o banco, o SQS local e o DynamoDB Local: `docker compose up -d postgres elasticmq dynamodb-local`.
 2. Na pasta `server/1 - Frameworks & Drivers/TechChallenge.Oficina.Billing.API/`, rode `dotnet run`.
 
-A API sobe em `http://localhost:7196` (perfil `http` do `launchSettings.json`, ambiente `Development`). O `appsettings.Development.json` aponta o SQS para o ElasticMQ deste repositório (`http://localhost:9326`), e o perfil define credenciais AWS fictícias (`local`), que o ElasticMQ aceita. Também dá para abrir o `server/TechChallenge.Oficina.Billing.slnx` no Visual Studio e rodar o perfil `http`.
+A API sobe em `http://localhost:7196` (perfil `http` do `launchSettings.json`, ambiente `Development`). O `appsettings.Development.json` aponta o SQS para o ElasticMQ deste repositório (`http://localhost:9326`) e o DynamoDB para o DynamoDB Local (`http://localhost:8000`), e o perfil define credenciais AWS fictícias (`local`), que os dois aceitam. Também dá para abrir o `server/TechChallenge.Oficina.Billing.slnx` no Visual Studio e rodar o perfil `http`.
 
 ### 4.4 Saga local com a Management e o OS Service
 
@@ -266,7 +271,7 @@ A Management fica em `http://localhost:7194`, o OS Service em `http://localhost:
 dotnet test ./server/TechChallenge.Oficina.Billing.slnx
 ```
 
-Os testes ficam em `server/Tests/`, um projeto por projeto da solução: Entities, UseCases, Controllers, Adapters, DB, Email, Messaging, Pagamentos, API e Integration. Eles usam banco em memória e mocks (inclusive do SQS e do Resend). O SDK do Mercado Pago roda contra um `HttpMessageHandler` falso, e os testes de integração usam o gateway simulado: não precisam de Postgres, ElasticMQ, Docker nem conta no Mercado Pago.
+Os testes (395) ficam em `server/Tests/`, um projeto por projeto da solução: Entities, UseCases, Controllers, Adapters, DB, Email, Messaging, NoSql, Pagamentos, API e Integration. Eles usam banco em memória e mocks (inclusive do SQS, do Resend e do SDK do DynamoDB). O SDK do Mercado Pago roda contra um `HttpMessageHandler` falso, e os testes de integração usam o gateway simulado e um histórico de pagamentos em memória: não precisam de Postgres, ElasticMQ, DynamoDB, Docker nem conta no Mercado Pago.
 
 ### 4.6 Problemas comuns
 
@@ -276,6 +281,7 @@ Os testes ficam em `server/Tests/`, um projeto por projeto da solução: Entitie
 4. **`verificar` continua `Pendente` (status 1) no modo real:** o cliente ainda não pagou pelo link, ou o pagamento está em análise. Pague e verifique de novo.
 5. **A OS não vai para `EmExecucao` depois do pagamento:** o `PagamentoAprovado` não chegou ao OS Service (mesmo ElasticMQ, seção 4.4), ou o orçamento não estava `AguardandoPagamento` (log "PagamentoAprovado nao publicado").
 6. **Logs `integracao.falha` com `Integracao` = `sqs` a cada poucos segundos:** o ElasticMQ configurado em `SQS_SERVICE_URL` (ou em `SqsSettings:ServiceUrl`) não está acessível. Na saga local, confira o passo 4 da seção 4.4.
+7. **Logs `integracao.falha` com `Integracao` = `dynamodb` (Warning) ou histórico vazio:** o pagamento segue normalmente, só o histórico fica sem a linha. Localmente, confira se o `dynamodb-local` está no ar (com `dotnet run`, seção 4.3). Na AWS, confira se a política `dynamodb-historico-pagamentos` está no usuário IAM do Billing; se o MANAGEMENT recriou o usuário, rode o Bootstrap deste repositório (seção 7).
 
 ## 5. Requisitos atendidos
 
@@ -285,19 +291,21 @@ Os testes ficam em `server/Tests/`, um projeto por projeto da solução: Entitie
 | Envio do orçamento ao cliente | Sim | E-mail pelo Resend, com o link de pagamento quando há cobrança pendente | `POST /api/orcamentos/{ordemServicoId}/enviar` | [OrcamentoEmailSender](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.Email/Features/Orcamentos/OrcamentoEmailSender.cs) |
 | Aprovação e recusa do orçamento | Sim | Aprovar cria a cobrança e devolve o link de pagamento; recusar publica `OrcamentoRecusado` (OS → `Finalizada`) | `POST /api/orcamentos/{ordemServicoId}/aprovar` e `/recusar` | [UseCases](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.Billing.UseCases/Features/Orcamentos/UseCases/OrcamentoUseCases.cs) · [Snapshot da OS](./server/4%20-%20Enterprise%20Business%20Rules/TechChallenge.Oficina.Billing.Entities/Features/OrdensServico/OrdemServicoReferencia.cs) |
 | Pagamento pelo Mercado Pago | Sim | Checkout Pro. A verificação e o webhook sempre consultam o Mercado Pago; sem access token, modo simulado | `POST /api/pagamentos/{ordemServicoId}/verificar`, `POST /api/pagamentos/notificacoes` e `GET /api/pagamentos/{ordemServicoId}` | [Endpoints](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.API/Features/Pagamentos/PagamentoEndpoints.cs) · [UseCases](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.Billing.UseCases/Features/Pagamentos/UseCases/PagamentoUseCases.cs) · [Gateway Mercado Pago](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.Pagamentos/Features/Gateways/GatewayPagamentoMercadoPago.cs) · [ADR-022](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md) |
+| Histórico de pagamentos em NoSQL | Sim | Amazon DynamoDB, complementar ao PostgreSQL (que continua sendo a fonte da verdade): a aprovação, a verificação e o webhook registram cada evento em *best-effort*, e os itens expiram em 180 dias | `GET /api/pagamentos/{ordemServicoId}/historico` | [Projeto NoSql](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.NoSql/) · [HistoricoPagamentoGateway](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.NoSql/Features/Pagamentos/HistoricoPagamentoGateway.cs) · [dynamodb.tf](./DB/infra/dynamodb.tf) · [ADR-024](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md) |
 | Atualização do status da OS depois do pagamento | Sim | `PagamentoAprovado`, publicado uma única vez: OS → `EmExecucao` no OS Service e débito de estoque na Management | Evento | [UseCases](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.Billing.UseCases/Features/Pagamentos/UseCases/PagamentoUseCases.cs) · [Entidade Pagamento](./server/4%20-%20Enterprise%20Business%20Rules/TechChallenge.Oficina.Billing.Entities/Features/Pagamentos/Pagamento.cs) |
 | Comunicação com os outros serviços (saga) | Sim | Filas SQS FIFO, *fan-out* no publicador, snapshot da OS por eventos, consumo idempotente e DLQ | Filas SQS | [Messaging](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.Messaging/) · [Casos de uso dos eventos](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.Billing.UseCases/Features/Eventos/UseCases/OrdemServicoEventosUseCases.cs) · [ADR-021](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md) |
 | Observabilidade | Sim | Os mesmos mecanismos da Management: logs JSON com eventos de negócio (inclusive `pagamento.*`), APM injetado no cluster, `/health/ready` com o banco, synthetic `GET /billing/health` e o dashboard e os monitores do Datadog, criados no MANAGEMENT. Os monitores de Kubernetes cobrem só o namespace `oficina` | `service` = `billing-api` | [docs/observabilidade.md](./docs/observabilidade.md) · [Eventos de log](./server/3%20-%20Application%20Business%20Rules/TechChallenge.Oficina.Billing.UseCases/Features/OrdensServico/Logging/OrdemServicoLogEventos.cs) · [LoggingExtension](./server/1%20-%20Frameworks%20%26%20Drivers/TechChallenge.Oficina.Billing.API/Extensions/LoggingExtension.cs) |
 
 ## 6. Infraestrutura
 
-Este repositório cria só o banco e os manifests do Billing. O resto vem do MANAGEMENT, que precisa estar de pé antes.
+Este repositório cria só os bancos (o RDS e a tabela DynamoDB do histórico) e os manifests do Billing. O resto vem do MANAGEMENT, que precisa estar de pé antes.
 
 | Parte | Onde | O que é |
 |---|---|---|
 | Aplicação | [server/](./server/) | Código .NET, testes e imagem Docker, publicada no ECR `techchallenge-oficina-billing` |
 | Banco | [DB/infra/](./DB/infra/) | RDS PostgreSQL `techchallenge-oficina-billing-postgres`: banco `oficina_billing`, usuário `sa`, porta `5432`, `db.t3.micro` com 20 GiB `gp3` criptografado, single-AZ, sem backup e sem proteção contra exclusão (ambiente descartável). Subnet group `techchallenge-oficina-billing-rds-subnets` e SG `techchallenge-oficina-billing-rds-sg`, com entrada na `5432` só a partir do SG dos nodes do EKS. As tabelas (`ordens_servico_referencias`, `orcamentos`, `pagamentos` e as de serviços) são criadas pelas migrations da API, no startup |
-| Manifests | [kubernetes/k8s/](./kubernetes/k8s/) | Namespace `billing`; ConfigMap `billing-api-config` (ambiente, nível de log, filas SQS e `AWS_REGION`); Secret `billing-api-secrets` (connection string, chave do SQS, token e URL de notificação do Mercado Pago e chave do Resend, gerado pelo pipeline); Deployment `billing-api` (1 réplica inicial, 100m/128Mi de requests, 500m/512Mi de limits, probes em `/health` e labels do Datadog); Service `NodePort` 30082; HPA de 1 a 2 pods (CPU 30% e memória 150%) |
+| Histórico de pagamentos | [DB/infra/](./DB/infra/) | Tabela DynamoDB `techchallenge-oficina-billing-pagamentos-historico` ([dynamodb.tf](./DB/infra/dynamodb.tf)): sob demanda (`PAY_PER_REQUEST`), chave `OrdemServicoId` + `OcorridoEm`, TTL em `ExpiraEm` (180 dias), sem PITR, sem streams e sem proteção contra exclusão. A política inline `dynamodb-historico-pagamentos` ([iam.tf](./DB/infra/iam.tf)), só com `dynamodb:PutItem` e `dynamodb:Query` na tabela, vai para o usuário IAM do Billing criado pelo MANAGEMENT (seção 6.1) |
+| Manifests | [kubernetes/k8s/](./kubernetes/k8s/) | Namespace `billing`; ConfigMap `billing-api-config` (ambiente, nível de log, filas SQS, tabela do DynamoDB e `AWS_REGION`); Secret `billing-api-secrets` (connection string, chave do usuário IAM do Billing, que serve ao SQS e ao DynamoDB, token e URL de notificação do Mercado Pago e chave do Resend, gerado pelo pipeline); Deployment `billing-api` (1 réplica inicial, 100m/128Mi de requests, 500m/512Mi de limits, probes em `/health` e labels do Datadog); Service `NodePort` 30082; HPA de 1 a 2 pods (CPU 30% e memória 150%) |
 
 O `DB/infra` encontra a rede do MANAGEMENT pelo cluster EKS e por nome, sem ler o state dele: a VPC vem do cluster, as subnets privadas pela tag `Name = techchallenge-oficina-private-*`, e o SG dos nodes pelo nome.
 
@@ -312,14 +320,17 @@ flowchart LR
   subgraph Mgmt[Criado pelo repo MANAGEMENT]
     EKS[Amazon EKS\nnamespace billing]
     GW[API Gateway\nrota /billing, webhook e NodePort 30082]
-    SQS[Filas SQS FIFO\nchave no SSM]
+    SQS[Filas SQS FIFO\nusuario IAM do Billing e chave no SSM]
   end
 
   Image -->|push :latest| ECR[Amazon ECR\ncriado manualmente]
   DBTF --> RDS[(RDS do Billing\noficina_billing)]
+  DBTF --> DDB[(DynamoDB\nhistorico de pagamentos)]
+  DBTF -->|politica do DynamoDB| SQS
   Manifests -->|kubectl apply -k| EKS
   EKS -->|pull| ECR
   EKS -->|PostgreSQL 5432| RDS
+  EKS -->|PutItem e Query| DDB
   EKS -->|eventos| SQS
   EKS -->|HTTPS| MP[Mercado Pago]
   EKS -->|HTTPS| Resend[Resend]
@@ -336,7 +347,7 @@ flowchart LR
 | Rotas e NodePort | `ANY /billing/{proxy+}` (com o authorizer), `GET /billing/health` e `POST /billing/api/pagamentos/notificacoes` (públicas), NodePort `30082` e target group `techchallenge-oficina-billing` | `nodePort: 30082` no [service.yml](./kubernetes/k8s/features/billing-api/service.yml) |
 | API Gateway | API `techchallenge-oficina-api`, cujo endpoint muda a cada recriação | O `_k8s-apply.yml` a encontra pelo nome e monta a URL de notificação do Mercado Pago |
 | Filas SQS | Consome `techchallenge-oficina-billing.fifo` e publica em `techchallenge-oficina-os-service.fifo` e `techchallenge-oficina-management.fifo` | ConfigMap (`SqsSettings__FilaConsumo`, `SqsSettings__FilasPublicacao__0` e `__1`) |
-| Chave do SQS | Parâmetros SSM `/techchallenge-oficina/sqs/billing/access-key-id` e `/secret-access-key` (usuário IAM `techchallenge-oficina-billing-sqs`) | O `_k8s-apply.yml` grava no Secret como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY` |
+| Usuário IAM e chave do Billing | Usuário `techchallenge-oficina-billing-sqs` e parâmetros SSM `/techchallenge-oficina/sqs/billing/access-key-id` e `/secret-access-key` | O `_k8s-apply.yml` grava a chave no Secret como `AWS_ACCESS_KEY_ID` e `AWS_SECRET_ACCESS_KEY`; ela serve às filas (política `sqs`, do MANAGEMENT) e à tabela do histórico (política `dynamodb-historico-pagamentos`, que o `DB/infra` daqui anexa ao usuário). Se o MANAGEMENT recriar o usuário, a política some junto: rode o Bootstrap deste repo |
 | Datadog | APM no namespace `billing`, `http_check` em `billing-api.billing.svc.cluster.local/health/ready` e synthetic `GET /billing/health` | Labels `tags.datadoghq.com/service: billing-api` e `tags.datadoghq.com/env: study` no Deployment |
 | Destroy | O Destroy do MANAGEMENT (job `billing-check`) falha se o RDS `techchallenge-oficina-billing-postgres` ou o SG `techchallenge-oficina-billing-rds-sg` ainda existirem | Rode o Destroy deste repo antes |
 
@@ -350,12 +361,12 @@ Crie uma vez, em `us-east-1`, o repositório privado `techchallenge-oficina-bill
 
 O CI/CD usa GitHub Actions, no mesmo padrão do MANAGEMENT e do OS-SERVICE. Os detalhes estão em [.github/workflows/README.md](./.github/workflows/README.md).
 
-- **Bootstrap** (manual): testes → RDS (`DB/infra`) → build e push da imagem → `kubectl apply` com restart.
+- **Bootstrap** (manual): testes → RDS, tabela DynamoDB e política IAM (`DB/infra`) → build e push da imagem → `kubectl apply` com restart.
 - **Deploy**:
   - **Pull Request para a `main`:** build e testes, validação offline do Terraform (`DB/infra`) e do Kustomize, mais o `plan` informativo do banco.
-  - **Push na `main`:** aplica só o que mudou, na ordem: RDS → imagem → manifests (com restart).
-- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): apaga o namespace `billing`, se o cluster existir, e depois o RDS.
-- **K8s Apply** (manual): reaplica os manifests e reinicia a API. Use depois de trocar `MERCADOPAGO_ACCESS_TOKEN` ou `RESEND_API_KEY`, depois que o MANAGEMENT recriar as chaves do SQS ou o API Gateway (a URL de notificação muda), ou ao ligar e desligar o Datadog.
+  - **Push na `main`:** aplica só o que mudou, na ordem: `DB/infra` (RDS, tabela DynamoDB e política IAM) → imagem → manifests (com restart).
+- **Destroy** (manual, com `confirm=destroy` e aprovação no environment `destroy`): apaga o namespace `billing`, se o cluster existir, e depois o `DB/infra` (RDS, tabela DynamoDB e política IAM).
+- **K8s Apply** (manual): reaplica os manifests e reinicia a API. Use depois de trocar `MERCADOPAGO_ACCESS_TOKEN` ou `RESEND_API_KEY`, depois que o MANAGEMENT recriar a chave do usuário IAM do Billing ou o API Gateway (a URL de notificação muda), ou ao ligar e desligar o Datadog. Se o MANAGEMENT recriar o próprio usuário IAM do Billing, use o Bootstrap: a política do DynamoDB precisa ser aplicada de novo no usuário novo.
 
 **Ordem entre os repositórios:**
 - **Para subir:** Bootstrap do MANAGEMENT → Bootstrap deste repositório, a qualquer momento (ele não depende do OS-SERVICE nem do EXECUTION, que sobem nesta ordem: OS-SERVICE → EXECUTION) → Deploy do LAMBDA.
@@ -363,9 +374,9 @@ O CI/CD usa GitHub Actions, no mesmo padrão do MANAGEMENT e do OS-SERVICE. Os d
 
 ### 7.1 Configuração no GitHub e na AWS
 
-Feita uma vez, à mão (detalhes no [README das pipelines](./.github/workflows/README.md#secrets-e-variables)). A rede, o EKS, o API Gateway (com a rota do webhook), as filas SQS, a chave do SQS no SSM e o Datadog vêm do Bootstrap do MANAGEMENT.
+Feita uma vez, à mão (detalhes no [README das pipelines](./.github/workflows/README.md#secrets-e-variables)). A rede, o EKS, o API Gateway (com a rota do webhook), as filas SQS, o usuário IAM do Billing com a chave no SSM e o Datadog vêm do Bootstrap do MANAGEMENT. O DynamoDB não tem secret nem variable: a tabela vem do `DB/infra`, e a chave é a mesma do SQS.
 - **AWS:** o repositório ECR `techchallenge-oficina-billing` (seção 6.2).
-- **Secrets:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (o mesmo usuário IAM `terraform` do MANAGEMENT) e `RDS_PASSWORD` (senha do RDS do Billing).
+- **Secrets:** `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` (o mesmo usuário IAM `terraform` do MANAGEMENT, que também precisa de permissões no DynamoDB e de `iam:PutUserPolicy`; hoje ele é administrador) e `RDS_PASSWORD` (senha do RDS do Billing).
 - **Secrets opcionais:** `MERCADOPAGO_ACCESS_TOKEN` (sem ele, modo simulado; seção 3) e `RESEND_API_KEY` (sem ela, o envio do orçamento por e-mail responde 400).
 - **Variables:** `AWS_REGION` (`us-east-1`), `ECR_REGISTRY` (`903936907231.dkr.ecr.us-east-1.amazonaws.com`), `EKS_CLUSTER_NAME` (`techchallenge-oficina-eks`), `RDS_INSTANCE_IDENTIFIER` (`techchallenge-oficina-billing-postgres`), `RDS_DATABASE` (`oficina_billing`) e `RDS_USERNAME` (`sa`).
 - **Environment `destroy`**, com *Required reviewers* e *Deployment branches* restrito a `main`.
@@ -378,7 +389,7 @@ Feita uma vez, à mão (detalhes no [README das pipelines](./.github/workflows/R
 Use a collection `e2e/TechChallenge.Oficina.Billing.API.postman_collection.json`:
 - **00 - Setup:** pega o token do Auth0, cadastra o cliente do token na Management, gera o JWT com `cpf` pela Lambda (só na AWS), cria os cadastros base na Management (cliente, veículo, insumo e serviço) e abre duas OS no OS Service, uma para aprovar e outra para recusar. Rode antes das outras pastas.
 - **Orcamentos:** gerar, consultar, gerar de novo, enviar por e-mail (204, ou 400 sem o Resend), aprovar (com o link de pagamento), aprovar de novo (mesma cobrança), recusar a segunda OS e os casos de erro (400 e 404).
-- **Pagamentos:** consultar a cobrança, verificar (aprovada no modo simulado), verificar de novo, conferir o orçamento `Aprovado` e a OS `EmExecucao` no OS Service, os 404 de OS sem cobrança, o webhook sem token (200, inclusive com id falso) e a verificação sem token (401).
+- **Pagamentos:** consultar a cobrança, verificar (aprovada no modo simulado), verificar de novo, consultar o histórico no DynamoDB (`CobrancaCriada` e, no modo simulado, `PagamentoAprovado`, em ordem cronológica), conferir o orçamento `Aprovado` e a OS `EmExecucao` no OS Service, os 404 de OS sem cobrança, o webhook sem token (200, inclusive com id falso) e a verificação sem token (401).
 
 Os passos com espera aguardam o consumo dos eventos pelas outras APIs (`tempo_espera_ms`, padrão de 3000 ms). A saga completa, até a entrega da OS (com o diagnóstico e a execução no Execução e Produção), está na pasta **Saga** da [collection do OS-SERVICE](https://github.com/GuiToniello/tech-challenge-fase-4-OS-SERVICE-soat16-rm374658/blob/main/e2e/TechChallenge.Oficina.OsService.API.postman_collection.json).
 
@@ -391,6 +402,7 @@ Na AWS, importe também o `e2e/AWS.postman_environment.json` e preencha só o `g
 As ADRs e RFCs são numeradas em sequência única entre os cinco repositórios. Este repositório guarda:
 - [ADR-021: Billing Service, Orçamento e Pagamentos com Banco Próprio](./docs/adr/ADR-021-Billing-Service-Orcamento-e-Pagamentos-com-Banco-Proprio.md)
 - [ADR-022: Pagamentos com Mercado Pago](./docs/adr/ADR-022-Pagamentos-com-Mercado-Pago.md)
+- [ADR-024: Histórico de Pagamentos no Amazon DynamoDB](./docs/adr/ADR-024-Historico-de-Pagamentos-no-DynamoDB.md)
 
 As demais ficam no MANAGEMENT (índice em [docs/adr/INDICE.md](https://github.com/GuiToniello/tech-challenge-fase-4-MANAGEMENT-soat16-rm374658/blob/main/docs/adr/INDICE.md)), no OS-SERVICE, no EXECUTION e no LAMBDA, e valem também para este serviço:
 

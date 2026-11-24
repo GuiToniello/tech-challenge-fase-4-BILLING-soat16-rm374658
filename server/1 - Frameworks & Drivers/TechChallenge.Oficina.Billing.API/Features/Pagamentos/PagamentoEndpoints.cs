@@ -34,6 +34,16 @@ namespace TechChallenge.Oficina.Billing.API.Features.Pagamentos
                 .Produces(StatusCodes.Status400BadRequest)
                 .Produces(StatusCodes.Status404NotFound);
 
+            // Historico de pagamentos da OS (DynamoDB), em ordem cronologica; lista vazia quando nao ha registros
+            group.MapGet(
+                "/{ordemServicoId:guid}/historico",
+                (
+                    IPagamentosController pagamentosController,
+                    Guid ordemServicoId,
+                    CancellationToken cancellationToken
+                ) => pagamentosController.GetHistorico(ordemServicoId, cancellationToken))
+                .Produces<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>(StatusCodes.Status200OK);
+
             // Webhook do Mercado Pago: anonimo (o provedor nao envia o JWT) e sempre 200. A notificacao so informa o id;
             // a situacao do pagamento e consultada no proprio Mercado Pago com o access token, entao uma notificacao forjada nao aprova nada.
             group.MapPost(

@@ -6,6 +6,8 @@ namespace TechChallenge.Oficina.Billing.Controllers.Features.Pagamentos
     {
         object Adapt(PagamentosResult<PagamentoViewModel, Exception> result);
 
+        object Adapt(PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception> result);
+
         // Confirmacao da notificacao do provedor: sempre 200, para o Mercado Pago nao reenviar
         object Recebido();
     }

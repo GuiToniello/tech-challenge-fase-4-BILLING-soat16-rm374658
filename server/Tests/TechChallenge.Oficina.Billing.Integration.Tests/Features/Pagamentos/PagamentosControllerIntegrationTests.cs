@@ -95,6 +95,52 @@ public sealed class PagamentosControllerIntegrationTests : IDisposable
     }
 
     [Fact]
+    public async Task GetHistorico_AposAprovarEVerificar_DeveRetornarCobrancaCriadaEPagamentoAprovadoEmOrdem()
+    {
+        var (ordemServicoId, aprovacao) = await AprovarOrcamentoAsync();
+        await _fixture.CriarPagamentosEndpoints().Verificar(ordemServicoId, CancellationToken.None);
+        // Ja aprovado: a nova verificacao nao acrescenta nada ao historico
+        await _fixture.CriarPagamentosEndpoints().Verificar(ordemServicoId, CancellationToken.None);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(await _fixture.CriarPagamentosEndpoints().GetHistorico(ordemServicoId, CancellationToken.None));
+
+        var historico = ok.Value!.ToArray();
+        Assert.Equal(["CobrancaCriada", "PagamentoAprovado"], historico.Select(evento => evento.Tipo));
+        Assert.Equal(["aprovacao", "verificacao"], historico.Select(evento => evento.Origem));
+        Assert.All(historico, evento =>
+        {
+            Assert.Equal(ordemServicoId, evento.OrdemServicoId);
+            Assert.Equal(aprovacao.Pagamento.Id, evento.PagamentoId);
+            Assert.Equal("Simulado", evento.Provedor);
+            Assert.Equal(60m, evento.Valor);
+        });
+        Assert.Equal(aprovacao.Pagamento.PreferenciaId, historico[0].PreferenciaId);
+        Assert.Equal(GatewayPagamentoSimulado.CriarPagamentoExternoId(ordemServicoId), historico[1].PagamentoExternoId);
+        Assert.True(historico[0].OcorridoEm <= historico[1].OcorridoEm);
+    }
+
+    [Fact]
+    public async Task GetHistorico_AposNotificacoes_DeveRegistrarCadaNotificacaoEOResultadoUmaVez()
+    {
+        var (ordemServicoId, _) = await AprovarOrcamentoAsync();
+        var pagamentoExternoId = GatewayPagamentoSimulado.CriarPagamentoExternoId(ordemServicoId);
+        await _fixture.CriarPagamentosEndpoints().ReceberNotificacao("payment", pagamentoExternoId, CancellationToken.None);
+        await _fixture.CriarPagamentosEndpoints().ReceberNotificacao("payment", pagamentoExternoId, CancellationToken.None);
+
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(await _fixture.CriarPagamentosEndpoints().GetHistorico(ordemServicoId, CancellationToken.None));
+
+        Assert.Equal(["CobrancaCriada", "NotificacaoRecebida", "PagamentoAprovado", "NotificacaoRecebida"], ok.Value!.Select(evento => evento.Tipo));
+    }
+
+    [Fact]
+    public async Task GetHistorico_SemCobranca_DeveRetornarListaVazia()
+    {
+        var ok = Assert.IsType<Ok<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>>>(await _fixture.CriarPagamentosEndpoints().GetHistorico(Guid.NewGuid(), CancellationToken.None));
+
+        Assert.Empty(ok.Value!);
+    }
+
+    [Fact]
     public async Task ReceberNotificacao_ComIdDesconhecido_DeveResponder200SemAlterar()
     {
         var (ordemServicoId, _) = await AprovarOrcamentoAsync();

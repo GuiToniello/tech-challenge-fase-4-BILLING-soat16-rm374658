@@ -8,4 +8,5 @@ public interface IOrcamentoUseCasesFacade
     IOrcamentoEmailSender OrcamentoEmailSender { get; }
     IEventosPublisher EventosPublisher { get; }
     IGatewayPagamento GatewayPagamento { get; }
+    IHistoricoPagamentoGateway HistoricoPagamentoGateway { get; }
 }

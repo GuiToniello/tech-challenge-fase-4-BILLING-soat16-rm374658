@@ -111,6 +111,36 @@ public sealed class PagamentosControllerTests
         await Assert.ThrowsAsync<InvalidOperationException>(action);
     }
 
+    [Fact]
+    public async Task GetHistorico_DeveRepassarOrdemERetornarAdaptado()
+    {
+        var id = Guid.NewGuid();
+        var adaptado = new object();
+        IReadOnlyCollection<EventoHistoricoPagamentoViewModel> historico = [new EventoHistoricoPagamentoViewModel { OrdemServicoId = id, Tipo = "CobrancaCriada" }];
+        _useCasesMock.Setup(u => u.ListarHistoricoAsync(id, It.IsAny<CancellationToken>())).ReturnsAsync(historico);
+        _adapterMock
+            .Setup(a => a.Adapt(It.Is<PagamentosResult<IReadOnlyCollection<EventoHistoricoPagamentoViewModel>, Exception>>(r => r.Value == historico)))
+            .Returns(adaptado);
+
+        var resposta = await CriarController().GetHistorico(id, CancellationToken.None);
+
+        Assert.Same(adaptado, resposta);
+    }
+
+    [Fact]
+    public async Task GetHistorico_DevePropagarFalhaDoDynamoDb()
+    {
+        // A falha ja sai como integracao.falha no gateway; o tratamento global responde 500
+        _useCasesMock
+            .Setup(u => u.ListarHistoricoAsync(It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("DynamoDB indisponivel"));
+
+        var action = async () => await CriarController().GetHistorico(Guid.NewGuid(), CancellationToken.None);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(action);
+        Assert.Empty(_loggerMock.Invocations);
+    }
+
     [Theory]
     [InlineData("payment")]
     [InlineData("PAYMENT")]

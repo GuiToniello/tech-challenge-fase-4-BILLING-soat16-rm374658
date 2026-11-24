@@ -14,6 +14,8 @@ using TechChallenge.Oficina.Billing.Email;
 using TechChallenge.Oficina.Billing.Email.Configuration;
 using TechChallenge.Oficina.Billing.Messaging;
 using TechChallenge.Oficina.Billing.Messaging.Configuration;
+using TechChallenge.Oficina.Billing.NoSql;
+using TechChallenge.Oficina.Billing.NoSql.Configuration;
 using TechChallenge.Oficina.Billing.Pagamentos;
 using TechChallenge.Oficina.Billing.Pagamentos.Configuration;
 using TechChallenge.Oficina.Billing.UseCases.Features.Eventos.UseCases;
@@ -61,6 +63,12 @@ var mercadoPagoSettings = builder.Configuration
     .Get<MercadoPagoSettings>()
     ?? new MercadoPagoSettings();
 
+// Historico de pagamentos no Amazon DynamoDB: complementar e best-effort (a fonte da verdade e o PostgreSQL); credenciais e regiao pela cadeia padrao do AWS SDK
+var dynamoDbSettings = builder.Configuration
+    .GetSection(DynamoDbSettings.SectionName)
+    .Get<DynamoDbSettings>()
+    ?? new DynamoDbSettings();
+
 builder.Services.AddAutoMapper(_ => { }, typeof(OrcamentoProfile).Assembly);
 builder.Services.AddScoped<IOrcamentoUseCasesFacade, OrcamentoUseCasesFacade>();
 builder.Services.AddScoped<IOrcamentoUseCases, OrcamentoUseCases>();
@@ -70,6 +78,7 @@ builder.Services.AddInfraData(databaseSettings.ConnectionString);
 builder.Services.AddInfraEmail(resendSettings);
 builder.Services.AddInfraPagamentos(mercadoPagoSettings);
 builder.Services.AddInfraMessaging(sqsSettings);
+builder.Services.AddInfraNoSql(dynamoDbSettings);
 
 builder.Services.AddScoped<IOrcamentosController, OrcamentosController>();
 builder.Services.AddScoped<IOrcamentosAdapter, OrcamentosAdapter>();
@@ -89,6 +98,9 @@ catch (Exception ex)
     Environment.ExitCode = 1;
     return;
 }
+
+// Local (DynamoDB Local): cria a tabela do historico; na AWS a tabela e do Terraform. Falha so gera aviso.
+await app.Services.GarantirTabelasLocaisAsync();
 
 app.UseLoggingConfiguration();
 app.UseMiddleware<GlobalExceptionHandlerMiddleware>();
